@@ -2,12 +2,12 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const path = require('path');
-const crypto = require('crypto');
 
 const { getUser, saveUser, addPayment, readDB, expireSubscriptions } = require('./utils/db');
 const { getLinks, reserveFreeLink, releaseLink, removeLinkFromPool } = require('./utils/links');
 const { encryptLink } = require('./utils/crypto');
 
+// --- НАСТРОЙКИ ---
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 const app = express();
@@ -18,9 +18,10 @@ app.use(express.json());
 const photoStart = path.resolve(__dirname, 'assets/start.jpg');
 const photoAbout = path.resolve(__dirname, 'assets/about.jpg');
 
+// Запускаем фоновую проверку истекших подписок (раз в 6 часов)
 setInterval(expireSubscriptions, 6 * 60 * 60 * 1000);
 
-// --- СТАРТ ---
+// --- КОМАНДА /start ---
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const text = `🚀 *ДОБРО ПОЖАЛОВАТЬ В VOIDLINK X*\n\nПремиальная WebRTC система связи.\n\n💎 Стоимость: ${process.env.PRICE} RUB / месяц.\n\n🏆 Оплати 3 месяца → вечный доступ навсегда!`;
@@ -39,7 +40,7 @@ bot.onText(/\/start/, async (msg) => {
     }
 });
 
-// --- КНОПКИ ---
+// --- ОБРАБОТКА КНОПОК (callback_query) ---
 bot.on('callback_query', async (query) => {
     const chatId = query.message?.chat?.id;
     if (!chatId) return;
@@ -48,16 +49,13 @@ bot.on('callback_query', async (query) => {
         await bot.answerCallbackQuery(query.id);
 
         if (query.data === 'buy') {
-            // ПРАВИЛЬНАЯ ССЫЛКА ДЛЯ АВТО-ОПЛАТЫ
             const payUrl = `https://yoomoney.ru/quickpay/confirm.xml?receiver=${process.env.YOOMONEY_WALLET}&quickpay-form=small&targets=VOIDLINK%20X&sum=${process.env.PRICE}&label=${chatId}&successURL=https://t.me/voidlinkx_bot`;
             
-            const text = `💳 *ОПЛАТА ПОДПИСКИ*\n\nСумма: *${process.env.PRICE} RUB*\n\n💰 После оплаты ДОСТУП ВЫДАЕТСЯ АВТОМАТИЧЕСКИ в течение 1 минуты.\n\n👇 Нажми на кнопку и оплати картой или с баланса ЮMoney:`;
+            const text = `💳 *ОПЛАТА ПОДПИСКИ*\n\nСумма: *${process.env.PRICE} RUB*\n\nПосле оплаты доступ ВЫДАЕТСЯ АВТОМАТИЧЕСКИ в течение 1 минуты.`;
             
             await bot.sendMessage(chatId, text, {
                 parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🔗 ОПЛАТИТЬ', url: payUrl }]]
-                }
+                reply_markup: { inline_keyboard: [[{ text: '🔗 ОПЛАТИТЬ', url: payUrl }]] }
             });
         }
 
@@ -67,36 +65,47 @@ bot.on('callback_query', async (query) => {
         }
 
     } catch (error) {
-        console.error('Ошибка:', error.message);
+        console.error('Ошибка в callback_query:', error.message);
     }
 });
 
-// 🔥 АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ПЛАТЕЖА (ВЕБХУК ЮMONEY)
+// *** АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ОПЛАТЫ (РАБОЧИЙ ВЕБХУК ЮMONEY) ***
 app.post('/yoomoney-webhook', async (req, res) => {
-    console.log('📥 Получен вебхук:', req.body);
+    console.log("📥 Вебхук получил запрос!");
     
+    // 1. Сразу говорим ЮMoney, что всё приняли (иначе она будет дублировать уведомления)
+    res.status(200).send('OK');
+
     try {
-        // Проверяем подпись (безопасность)
-        const notificationSecret = req.body.notification_secret;
-        if (notificationSecret !== process.env.YOOMONEY_SECRET) {
-            console.log('❌ Неверный секрет');
-            return res.status(400).send('Invalid secret');
+        // 2. Логируем то, что пришло, для отладки
+        console.log("Тело запроса от ЮMoney:", req.body);
+
+        const { label, amount, codepro, notification_secret } = req.body;
+
+        // 3. Проверяем секрет (сверяем с тем, что в .env на Railway)
+        if (notification_secret !== process.env.YOOMONEY_SECRET) {
+            console.log("❌ Ошибка: неверный секрет вебхука!");
+            return;
         }
 
-        const { label, amount, withraw_amount, operation_id } = req.body;
-        
-        // label = это наш chatId пользователя
+        // 4. Проверяем, что это обычный платеж (не защищенный кодом)
+        if (!label || codepro === 'true') {
+            console.log("ℹ️ Платеж с кодом протекции или без метки, игнорируем.");
+            return;
+        }
+
         const userId = Number(label);
-        if (!userId) return res.status(200).send('OK');
+        const paymentAmount = parseFloat(amount);
         
-        // Проверяем, что сумма правильная
-        const paymentAmount = parseFloat(amount || withraw_amount);
+        // 5. Проверяем сумму (можно закомментировать, если не нужно)
         if (paymentAmount < parseFloat(process.env.PRICE)) {
-            console.log(`❌ Сумма ${paymentAmount} меньше ${process.env.PRICE}`);
-            return res.status(200).send('OK');
+            console.log(`⚠️ Сумма ${paymentAmount} меньше ${process.env.PRICE}`);
+            return;
         }
 
-        // --- ВЫДАЕМ ДОСТУП АВТОМАТИЧЕСКИ ---
+        console.log(`✅ Обрабатываю успешную оплату от ${userId} на сумму ${paymentAmount} руб.`);
+
+        // --- 6. ЛОГИКА ВЫДАЧИ ДОСТУПА (твой код) ---
         let user = await getUser(userId);
         let link;
         let months = user ? user.monthsPaid + 1 : 1;
@@ -105,8 +114,8 @@ app.post('/yoomoney-webhook', async (req, res) => {
         if (!user || !user.personalLink) {
             link = await reserveFreeLink();
             if (!link) {
-                await bot.sendMessage(ADMIN_ID, `❌ КРИТИЧНО: У пользователя ${userId} нет свободных ссылок в пуле!`);
-                return res.status(200).send('OK');
+                await bot.sendMessage(ADMIN_ID, `❌ КРИТИЧНО: Закончились свободные ссылки для пользователя ${userId}!`);
+                return;
             }
         } else {
             link = user.personalLink;
@@ -130,13 +139,13 @@ app.post('/yoomoney-webhook', async (req, res) => {
         };
 
         await saveUser(user);
-        await addPayment({ user: userId, amount: paymentAmount, operation_id, date: new Date().toISOString() });
+        await addPayment({ user: userId, amount: paymentAmount, date: new Date().toISOString() });
 
         const linkToSend = isPermanent ? link : encryptLink(link, userId);
 
         let clientText = `✅ *ОПЛАТА ПОЛУЧЕНА! ДОСТУП АКТИВИРОВАН!*\n\n`;
         if (isPermanent) {
-            clientText += `🏆 ПОЗДРАВЛЯЮ! Вы оплатили 3 месяца и получили *ВЕЧНЫЙ ДОСТУП*!\n\n🌐 Ваша ссылка: ${linkToSend}\n\n🔒 Сохраните её в надежном месте.`;
+            clientText += `🏆 ПОЗДРАВЛЯЮ! Вы получили *ВЕЧНЫЙ ДОСТУП*!\n\n🌐 Ваша ссылка: ${linkToSend}\n\n🔒 Сохраните её в надежном месте.`;
         } else {
             clientText += `⏳ Доступ на 1 месяц активирован.\n\n🌐 Ваш шлюз: ${linkToSend}\n\n💎 Оплачено месяцев: *${months}/3*. Осталось: *${3 - months} мес.* до вечного доступа.`;
         }
@@ -144,14 +153,13 @@ app.post('/yoomoney-webhook', async (req, res) => {
         await bot.sendMessage(userId, clientText, { parse_mode: 'Markdown' });
         await bot.sendMessage(ADMIN_ID, `💰 *АВТО-ОПЛАТА*: Пользователь ${userId} оплатил ${paymentAmount} руб. Выдан ${months}-й месяц доступа.`);
 
-        res.status(200).send('OK');
     } catch (err) {
-        console.error('🔥 Ошибка вебхука:', err.message);
-        res.status(200).send('OK');
+        console.error('🔥 КРИТИЧЕСКАЯ ОШИБКА В ВЕБХУКЕ:', err.message);
+        // Ничего не отправляем в res, так как ответ 'OK' уже ушел
     }
 });
 
-// --- АДМИН-КОМАНДЫ ---
+// --- АДМИН-КОМАНДЫ (рабочие) ---
 bot.onText(/\/admin/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     await bot.sendMessage(ADMIN_ID, `🛠 *VOIDLINK X ADMIN*\n\n/links — статус ссылок\n/users — список клиентов\n/stats — финансы\n/addlink <url> — добавить ссылку`);
@@ -192,5 +200,10 @@ bot.onText(/\/addlink (.+)/, async (msg, match) => {
     await bot.sendMessage(ADMIN_ID, `✅ Ссылка ${newUrl} добавлена в пул!`);
 });
 
+// --- ЗАПУСК СЕРВЕРА ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Бот запущен на порту ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`✅ VOIDLINK X BOT запущен на порту ${PORT}`);
+    console.log(`🤖 Бот слушает команды...`);
+    console.log(`🌐 Вебхук будет доступен по адресу: /yoomoney-webhook`);
+});
