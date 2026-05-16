@@ -75,6 +75,21 @@ function adminProfileText(profile = {}) {
     ].join('\n');
 }
 
+function normalizeUserLinks(user = {}) {
+    if (Array.isArray(user.links)) {
+        return user.links;
+    }
+
+    if (user.personalLink) {
+        return [{
+            url: user.personalLink,
+            issuedAt: user.firstPaidAt || user.createdAt || new Date().toISOString()
+        }];
+    }
+
+    return [];
+}
+
 async function upsertUserProfile(profile) {
     if (!profile.id) return null;
 
@@ -87,7 +102,8 @@ async function upsertUserProfile(profile) {
         firstName: profile.firstName || existing?.firstName || '',
         lastName: profile.lastName || existing?.lastName || '',
         languageCode: profile.languageCode || existing?.languageCode || '',
-        purchases: existing?.purchases || existing?.monthsPaid || 0,
+        purchases: existing?.purchases || existing?.monthsPaid || normalizeUserLinks(existing).length,
+        links: normalizeUserLinks(existing),
         personalLink: existing?.personalLink || null,
         active: Boolean(existing?.active),
         createdAt: existing?.createdAt || now,
@@ -266,7 +282,7 @@ function buildClientAccessText({ linkToSend, months, isPermanent }) {
         '',
         `🔗 <b>Ваша оригинальная ссылка:</b>\n${escapeHtml(linkToSend)}`,
         '',
-        '🔒 Сохраните её в надёжном месте. Эта ссылка закреплена за вами и удалена из общего пула.'
+        '🔒 Сохраните её в надёжном месте. Эта ссылка удалена из общего пула и закреплена за вашей покупкой.'
     ].join('\n');
 }
 
@@ -522,21 +538,18 @@ bot.on('callback_query', async (query) => {
             const userId = parseInt(query.data.split('_')[1]);
             
             let user = await getUser(userId);
-            let link;
-
-            if (user?.personalLink) {
-                link = user.personalLink;
-                await bot.sendMessage(userId, buildClientAccessText({ linkToSend: link }), { parse_mode: 'HTML', disable_web_page_preview: true });
-                await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-                await bot.sendMessage(ADMIN_ID, `ℹ️ У пользователя ${userId} уже есть закреплённая ссылка. Повторно отправил её без списания новой ссылки из пула.`);
-                return;
-            }
-
-            link = await reserveFreeLink();
+            const link = await reserveFreeLink();
             if (!link) {
                 await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
                 return;
             }
+
+            const existingLinks = normalizeUserLinks(user);
+            const issuedAt = new Date().toISOString();
+            const userLinks = [
+                ...existingLinks,
+                { url: link, issuedAt }
+            ];
 
             user = {
                 id: userId,
@@ -545,12 +558,13 @@ bot.on('callback_query', async (query) => {
                 firstName: user?.firstName || '',
                 lastName: user?.lastName || '',
                 languageCode: user?.languageCode || '',
-                purchases: 1,
-                personalLink: link,
+                purchases: userLinks.length,
+                links: userLinks,
+                personalLink: userLinks[0]?.url || link,
                 active: true,
-                createdAt: user?.createdAt || new Date().toISOString(),
-                firstPaidAt: user?.firstPaidAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString()
+                createdAt: user?.createdAt || issuedAt,
+                firstPaidAt: user?.firstPaidAt || issuedAt,
+                updatedAt: issuedAt
             };
 
             await saveUser(user);
@@ -560,7 +574,7 @@ bot.on('callback_query', async (query) => {
 
             await bot.sendMessage(userId, buildClientAccessText({ linkToSend }), { parse_mode: 'HTML', disable_web_page_preview: true });
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `✅ Оригинальная ссылка выдана пользователю ${userId}. Ссылка удалена из пула.`);
+            await bot.sendMessage(ADMIN_ID, `✅ Оригинальная ссылка выдана пользователю ${userId}. Покупок у клиента: ${userLinks.length}. Ссылка удалена из пула.`);
             return;
         }
 
@@ -704,7 +718,7 @@ bot.onText(/\/links/, async (msg) => {
 bot.onText(/\/users/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     const db = await readDB();
-    const users = db.users.filter(u => Number(u.purchases || u.monthsPaid || 0) > 0);
+    const users = db.users.filter(u => normalizeUserLinks(u).length > 0 || Number(u.purchases || u.monthsPaid || 0) > 0);
     if (!users.length) return bot.sendMessage(ADMIN_ID, '👥 Клиентов с подтверждёнными оплатами пока нет.');
 
     let text = '👥 <b>Клиенты VOIDLINK X</b>\n\n';
@@ -712,13 +726,17 @@ bot.onText(/\/users/, async (msg) => {
         const telegramId = u.telegramId || u.id;
         const username = u.username ? `@${u.username}` : 'не указан';
         const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || 'не указано';
+        const userLinks = normalizeUserLinks(u);
         const status = 'ссылка выдана';
         text += `${i + 1}. 👤 Клиент\n`;
         text += `🆔 Telegram ID: <code>${telegramId}</code>\n`;
         text += `🔗 Username: ${escapeHtml(username)}\n`;
         text += `📝 Имя: ${escapeHtml(name)}\n`;
-        text += `💎 Покупок: ${u.purchases || u.monthsPaid || 1}\n`;
-        text += `🔗 Ссылка: ${escapeHtml(u.personalLink || 'нет')}\n`;
+        text += `💎 Покупок: ${userLinks.length || u.purchases || u.monthsPaid || 1}\n`;
+        userLinks.forEach((link, linkIndex) => {
+            const issued = link.issuedAt ? ` (${new Date(link.issuedAt).toLocaleDateString('ru-RU')})` : '';
+            text += `🔗 #${linkIndex + 1}: ${escapeHtml(link.url)}${issued}\n`;
+        });
         text += `🛡 Статус: ${status}\n\n`;
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'HTML', disable_web_page_preview: true });
