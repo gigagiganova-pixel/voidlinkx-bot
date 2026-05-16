@@ -26,6 +26,7 @@ const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, 
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 let pollingConflictShown = false;
 const reviewDrafts = new Map();
+const photoFileIdCache = new Map();
 
 const MAIN_KEYBOARD = {
     inline_keyboard: [
@@ -72,13 +73,6 @@ function adminProfileText(profile = {}) {
         `🔗 Username: ${escapeHtml(username)}`,
         `💬 Профиль: <a href="${profileUrl(profile)}">открыть в Telegram</a>`
     ].join('\n');
-}
-
-function ownerLabel(owner = {}) {
-    if (!owner || !owner.telegramId) return '';
-    const username = owner.username ? `@${owner.username}` : 'без username';
-    const name = [owner.firstName, owner.lastName].filter(Boolean).join(' ');
-    return `${username}${name ? `, ${name}` : ''}, ID ${owner.telegramId}`;
 }
 
 async function upsertUserProfile(profile) {
@@ -283,8 +277,24 @@ async function sendPhotoMessage(chatId, photoPath, text, replyMarkup) {
     };
 
     if (fs.existsSync(photoPath)) {
+        const cachedFileId = photoFileIdCache.get(photoPath);
+
+        if (cachedFileId) {
+            try {
+                await bot.sendPhoto(chatId, cachedFileId, { ...options, caption: text });
+                return;
+            } catch (error) {
+                photoFileIdCache.delete(photoPath);
+                console.error(`Не удалось отправить кеш ${path.basename(photoPath)}:`, error.message);
+            }
+        }
+
         try {
-            await bot.sendPhoto(chatId, photoPath, { ...options, caption: text });
+            const sent = await bot.sendPhoto(chatId, photoPath, { ...options, caption: text });
+            const bestPhoto = sent.photo?.[sent.photo.length - 1];
+            if (bestPhoto?.file_id) {
+                photoFileIdCache.set(photoPath, bestPhoto.file_id);
+            }
             return;
         } catch (error) {
             console.error(`Не удалось отправить ${path.basename(photoPath)}:`, error.message);
@@ -356,6 +366,7 @@ bot.on('callback_query', async (query) => {
                     [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
                 ]
             });
+            return;
         }
 
         // КНОПКА: О ПРОЕКТЕ
@@ -365,6 +376,7 @@ bot.on('callback_query', async (query) => {
             } catch (e) {
                 await bot.sendMessage(chatId, buildAboutText(), { parse_mode: 'HTML' });
             }
+            return;
         }
 
         // КНОПКА: ОТЗЫВЫ
@@ -377,6 +389,7 @@ bot.on('callback_query', async (query) => {
                     [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
                 ]
             });
+            return;
         }
 
         // КНОПКА: ОСТАВИТЬ ОТЗЫВ
@@ -397,6 +410,7 @@ bot.on('callback_query', async (query) => {
                 };
 
             await bot.sendMessage(chatId, buildReviewStartText(user), { parse_mode: 'HTML', reply_markup: keyboard });
+            return;
         }
 
         // КНОПКА: ОЦЕНКА ОТЗЫВА
@@ -421,6 +435,7 @@ bot.on('callback_query', async (query) => {
                 ].join('\n'),
                 { parse_mode: 'HTML' }
             );
+            return;
         }
 
         // АДМИН: ПОДТВЕРДИТЬ ОТЗЫВ
@@ -437,6 +452,7 @@ bot.on('callback_query', async (query) => {
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
             await bot.sendMessage(ADMIN_ID, `✅ Отзыв опубликован: ${stars(review.rating)} от ${review.displayName}`);
             await bot.sendMessage(review.userId, '✅ Спасибо! Ваш отзыв прошёл модерацию и опубликован в блоке отзывов.');
+            return;
         }
 
         // АДМИН: ОТКЛОНИТЬ ОТЗЫВ
@@ -452,6 +468,7 @@ bot.on('callback_query', async (query) => {
 
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
             await bot.sendMessage(ADMIN_ID, `❌ Отзыв отклонён: ${stars(review.rating)} от ${review.displayName}`);
+            return;
         }
 
         // КНОПКА: ПОДДЕРЖКА
@@ -462,6 +479,7 @@ bot.on('callback_query', async (query) => {
                     [{ text: '💎 Купить доступ', callback_data: 'buy' }]
                 ]
             });
+            return;
         }
 
         // ПОЛЬЗОВАТЕЛЬ НАЖАЛ "Я ОПЛАТИЛ"
@@ -495,6 +513,7 @@ bot.on('callback_query', async (query) => {
             );
             
             await bot.sendMessage(profile.id, '✅ Заявка отправлена администратору. Доступ будет выдан после ручной проверки платежа, обычно в течение 5-15 минут.');
+            return;
         }
 
         // АДМИН ПОДТВЕРДИЛ
@@ -504,22 +523,19 @@ bot.on('callback_query', async (query) => {
             
             let user = await getUser(userId);
             let link;
-            const purchases = (user?.purchases || user?.monthsPaid || 0) + 1;
 
-            if (!user || !user.personalLink) {
-                const owner = {
-                    telegramId: userId,
-                    username: user?.username || '',
-                    firstName: user?.firstName || '',
-                    lastName: user?.lastName || ''
-                };
-                link = await reserveFreeLink(owner);
-                if (!link) {
-                    await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
-                    return;
-                }
-            } else {
+            if (user?.personalLink) {
                 link = user.personalLink;
+                await bot.sendMessage(userId, buildClientAccessText({ linkToSend: link }), { parse_mode: 'HTML', disable_web_page_preview: true });
+                await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
+                await bot.sendMessage(ADMIN_ID, `ℹ️ У пользователя ${userId} уже есть закреплённая ссылка. Повторно отправил её без списания новой ссылки из пула.`);
+                return;
+            }
+
+            link = await reserveFreeLink();
+            if (!link) {
+                await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
+                return;
             }
 
             user = {
@@ -529,7 +545,7 @@ bot.on('callback_query', async (query) => {
                 firstName: user?.firstName || '',
                 lastName: user?.lastName || '',
                 languageCode: user?.languageCode || '',
-                purchases,
+                purchases: 1,
                 personalLink: link,
                 active: true,
                 createdAt: user?.createdAt || new Date().toISOString(),
@@ -545,6 +561,7 @@ bot.on('callback_query', async (query) => {
             await bot.sendMessage(userId, buildClientAccessText({ linkToSend }), { parse_mode: 'HTML', disable_web_page_preview: true });
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
             await bot.sendMessage(ADMIN_ID, `✅ Оригинальная ссылка выдана пользователю ${userId}. Ссылка удалена из пула.`);
+            return;
         }
 
         // АДМИН ОТКЛОНИЛ
@@ -554,6 +571,7 @@ bot.on('callback_query', async (query) => {
             await bot.sendMessage(userId, '❌ Платёж не подтверждён. Пожалуйста, проверьте сумму, кошелёк и попробуйте отправить заявку ещё раз.');
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
             await bot.sendMessage(ADMIN_ID, `❌ Заявка пользователя ${userId} отклонена.`);
+            return;
         }
 
     } catch (error) {
@@ -691,15 +709,15 @@ bot.onText(/\/users/, async (msg) => {
 
     let text = '👥 <b>Клиенты VOIDLINK X</b>\n\n';
     users.forEach((u, i) => {
-        const profile = {
-            id: u.telegramId || u.id,
-            username: u.username,
-            firstName: u.firstName,
-            lastName: u.lastName
-        };
+        const telegramId = u.telegramId || u.id;
+        const username = u.username ? `@${u.username}` : 'не указан';
+        const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || 'не указано';
         const status = 'ссылка выдана';
-        text += `${i + 1}. <a href="${profileUrl(profile)}">${escapeHtml(fullName(profile))}</a>\n`;
-        text += `🆔 ID: <code>${profile.id}</code> | 💎 покупок: ${u.purchases || u.monthsPaid || 1}\n`;
+        text += `${i + 1}. 👤 Клиент\n`;
+        text += `🆔 Telegram ID: <code>${telegramId}</code>\n`;
+        text += `🔗 Username: ${escapeHtml(username)}\n`;
+        text += `📝 Имя: ${escapeHtml(name)}\n`;
+        text += `💎 Покупок: ${u.purchases || u.monthsPaid || 1}\n`;
         text += `🔗 Ссылка: ${escapeHtml(u.personalLink || 'нет')}\n`;
         text += `🛡 Статус: ${status}\n\n`;
     });
