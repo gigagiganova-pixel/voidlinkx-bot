@@ -98,6 +98,10 @@ function adminProfileText(profile = {}) {
 }
 
 function normalizeUserLinks(user = {}) {
+    if (!user) {
+        return [];
+    }
+
     if (Array.isArray(user.links)) {
         return user.links;
     }
