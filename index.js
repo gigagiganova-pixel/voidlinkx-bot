@@ -45,6 +45,36 @@ const MAIN_KEYBOARD = {
     ]
 };
 
+function actionKeyboard(options = {}) {
+    const {
+        buy = true,
+        support = true,
+        reviews = false,
+        leaveReview = false,
+        supportText = '💬 Поддержка'
+    } = options;
+
+    const rows = [];
+
+    if (leaveReview) {
+        rows.push([{ text: '⭐ Оставить отзыв', callback_data: 'leave_review' }]);
+    }
+
+    if (reviews) {
+        rows.push([{ text: '⭐ Отзывы', callback_data: 'reviews' }]);
+    }
+
+    if (buy) {
+        rows.push([{ text: '💎 Купить доступ', callback_data: 'buy' }]);
+    }
+
+    if (support) {
+        rows.push([{ text: supportText, url: `https://t.me/${supportUsername}` }]);
+    }
+
+    return { inline_keyboard: rows };
+}
+
 function escapeHtml(value = '') {
     return String(value)
         .replace(/&/g, '&amp;')
@@ -184,6 +214,20 @@ function buildPaymentText() {
         '4. Администратор проверит платёж и выдаст оригинальную рабочую ссылку.',
         '',
         '⏱ Обычно проверка занимает 5-15 минут.'
+    ].join('\n');
+}
+
+function buildSoldOutText() {
+    return [
+        '⌛ <b>Свободные каналы временно закончились</b>',
+        '',
+        'Сейчас все личные ссылки из пула разобраны.',
+        '',
+        '🔄 Пул обновляется два раза в день:',
+        '• 11:00 по МСК',
+        '• 23:00 по МСК',
+        '',
+        'Если вы уже оплатили или хотите закрепить место, напишите в поддержку.'
     ].join('\n');
 }
 
@@ -354,6 +398,11 @@ async function sendStartMessage(chatId) {
     await sendPhotoMessage(chatId, photoStart, buildStartText(), MAIN_KEYBOARD);
 }
 
+async function hasFreeLinks() {
+    const links = await getLinks();
+    return links.some((link) => link.status === 'free');
+}
+
 async function notifyAdminError(context, error) {
     if (!ADMIN_ID) return;
 
@@ -425,6 +474,17 @@ bot.on('callback_query', async (query) => {
         // КНОПКА: КУПИТЬ ДОСТУП
         if (query.data === 'buy') {
             await upsertUserProfile(profile);
+
+            if (!(await hasFreeLinks())) {
+                await sendPhotoMessage(
+                    chatId,
+                    photoPayment,
+                    buildSoldOutText(),
+                    actionKeyboard({ buy: false, reviews: true, supportText: '💬 Написать в поддержку' })
+                );
+                return;
+            }
+
             const payUrl = buildPaymentUrl(profile.id);
             const keyboard = [
                 [{ text: '✅ Я оплатил', callback_data: 'check_payment' }],
@@ -445,11 +505,7 @@ bot.on('callback_query', async (query) => {
 
         // КНОПКА: О ПРОЕКТЕ
         if (query.data === 'about') {
-            try {
-                await bot.sendPhoto(chatId, photoAbout, { caption: buildAboutText(), parse_mode: 'HTML' });
-            } catch (e) {
-                await bot.sendMessage(chatId, buildAboutText(), { parse_mode: 'HTML' });
-            }
+            await sendPhotoMessage(chatId, photoAbout, buildAboutText(), actionKeyboard());
             return;
         }
 
@@ -457,11 +513,7 @@ bot.on('callback_query', async (query) => {
         if (query.data === 'reviews') {
             const db = await readDB();
             await sendPhotoMessage(chatId, photoReviews, buildPublicReviewsText(db.reviews), {
-                inline_keyboard: [
-                    [{ text: '⭐ Оставить отзыв', callback_data: 'leave_review' }],
-                    [{ text: '💎 Купить доступ', callback_data: 'buy' }],
-                    [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
-                ]
+                inline_keyboard: actionKeyboard({ leaveReview: true }).inline_keyboard
             });
             return;
         }
@@ -560,6 +612,20 @@ bot.on('callback_query', async (query) => {
         if (query.data === 'check_payment') {
             await upsertUserProfile(profile);
 
+            if (!(await hasFreeLinks())) {
+                await sendPhotoMessage(
+                    chatId,
+                    photoPayment,
+                    buildSoldOutText(),
+                    actionKeyboard({ buy: false, reviews: true, supportText: '💬 Написать в поддержку' })
+                );
+                await bot.sendMessage(
+                    ADMIN_ID,
+                    `⚠️ Пользователь ${profile.id} нажал «Я оплатил», но пул ссылок пуст. Проверьте оплату и добавьте ссылки через /addlink <url>.`
+                );
+                return;
+            }
+
             // Отправляем админу запрос на подтверждение
             const keyboard = {
                 inline_keyboard: [
@@ -599,6 +665,11 @@ bot.on('callback_query', async (query) => {
             const link = await reserveFreeLink();
             if (!link) {
                 await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
+                await bot.sendMessage(
+                    userId,
+                    buildSoldOutText(),
+                    { parse_mode: 'HTML', reply_markup: actionKeyboard({ buy: false, supportText: '💬 Написать в поддержку' }) }
+                );
                 return;
             }
 
@@ -738,22 +809,22 @@ bot.onText(/\/admin/, async (msg) => {
 });
 
 bot.onText(/\/support/, async (msg) => {
-    await sendPhotoMessage(msg.chat.id, photoSupport, buildSupportText(), {
-        inline_keyboard: [
-            [{ text: '💬 Написать в поддержку', url: `https://t.me/${supportUsername}` }]
-        ]
-    });
+    await sendPhotoMessage(
+        msg.chat.id,
+        photoSupport,
+        buildSupportText(),
+        actionKeyboard({ supportText: '💬 Написать в поддержку' })
+    );
 });
 
 bot.onText(/\/reviews/, async (msg) => {
     const db = await readDB();
-    await sendPhotoMessage(msg.chat.id, photoReviews, buildPublicReviewsText(db.reviews), {
-        inline_keyboard: [
-            [{ text: '⭐ Оставить отзыв', callback_data: 'leave_review' }],
-            [{ text: '💎 Купить доступ', callback_data: 'buy' }],
-            [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
-        ]
-    });
+    await sendPhotoMessage(
+        msg.chat.id,
+        photoReviews,
+        buildPublicReviewsText(db.reviews),
+        actionKeyboard({ leaveReview: true })
+    );
 });
 
 bot.onText(/\/links/, async (msg) => {
@@ -769,6 +840,7 @@ bot.onText(/\/links/, async (msg) => {
         '',
         `🟢 Свободно: ${free}`,
         `📊 Всего: ${links.length}`,
+        '🔄 Обновление пула: 11:00 и 23:00 по МСК',
         '',
         ...details
     ].join('\n'), { parse_mode: 'HTML' });
