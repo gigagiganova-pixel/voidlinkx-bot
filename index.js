@@ -65,6 +65,22 @@ function profileUrl(profile = {}) {
     return profile.username ? `https://t.me/${profile.username}` : `tg://user?id=${profile.id}`;
 }
 
+function buildPaymentUrl(profileId) {
+    const wallet = process.env.YOOMONEY_WALLET;
+    if (!wallet) return null;
+
+    const params = new URLSearchParams({
+        receiver: wallet,
+        'quickpay-form': 'small',
+        targets: 'VOIDLINK X',
+        sum: String(price),
+        label: String(profileId),
+        successURL: `https://t.me/${botUsername}`
+    });
+
+    return `https://yoomoney.ru/quickpay/confirm.xml?${params.toString()}`;
+}
+
 function adminProfileText(profile = {}) {
     const username = profile.username ? `@${profile.username}` : 'не указан';
     return [
@@ -324,6 +340,29 @@ async function sendPaymentMessage(chatId, text, replyMarkup) {
     await sendPhotoMessage(chatId, photoPayment, text, replyMarkup);
 }
 
+async function sendStartMessage(chatId) {
+    await sendPhotoMessage(chatId, photoStart, buildStartText(), MAIN_KEYBOARD);
+}
+
+async function notifyAdminError(context, error) {
+    if (!ADMIN_ID) return;
+
+    try {
+        await bot.sendMessage(
+            ADMIN_ID,
+            [
+                '⚠️ <b>Ошибка бота</b>',
+                '',
+                `<b>Где:</b> ${escapeHtml(context)}`,
+                `<b>Причина:</b> ${escapeHtml(error?.message || error)}`
+            ].join('\n'),
+            { parse_mode: 'HTML' }
+        );
+    } catch (notifyError) {
+        console.error('Не удалось отправить ошибку админу:', notifyError.message);
+    }
+}
+
 async function addReview(review) {
     const db = await readDB();
     db.reviews.push(review);
@@ -350,14 +389,15 @@ async function updateReviewStatus(reviewId, status) {
 }
 
 // --- КОМАНДА /start ---
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/^\/start(?:\s|$)/, async (msg) => {
     const chatId = msg.chat.id;
-    await upsertUserProfile(profileFromTelegram(msg.from));
 
     try {
-        await bot.sendPhoto(chatId, photoStart, { caption: buildStartText(), parse_mode: 'HTML', reply_markup: MAIN_KEYBOARD });
-    } catch (e) {
-        await bot.sendMessage(chatId, buildStartText(), { parse_mode: 'HTML', reply_markup: MAIN_KEYBOARD });
+        await upsertUserProfile(profileFromTelegram(msg.from));
+        await sendStartMessage(chatId);
+    } catch (error) {
+        console.error('Ошибка в /start:', error.message);
+        await notifyAdminError(`/start от ${msg.from?.id || chatId}`, error);
     }
 });
 
@@ -367,20 +407,28 @@ bot.on('callback_query', async (query) => {
     if (!chatId) return;
 
     try {
-        await bot.answerCallbackQuery(query.id);
+        await bot.answerCallbackQuery(query.id).catch((error) => {
+            console.error('Не удалось ответить на callback:', error.message);
+        });
         const profile = profileFromTelegram(query.from);
 
         // КНОПКА: КУПИТЬ ДОСТУП
         if (query.data === 'buy') {
             await upsertUserProfile(profile);
-            const payUrl = `https://yoomoney.ru/quickpay/confirm.xml?receiver=${process.env.YOOMONEY_WALLET}&quickpay-form=small&targets=VOIDLINK%20X&sum=${price}&label=${profile.id}&successURL=https://t.me/${botUsername}`;
+            const payUrl = buildPaymentUrl(profile.id);
+            const keyboard = [
+                [{ text: '✅ Я оплатил', callback_data: 'check_payment' }],
+                [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+            ];
+
+            if (payUrl) {
+                keyboard.unshift([{ text: '💳 Перейти к оплате', url: payUrl }]);
+            } else {
+                await notifyAdminError('кнопка buy', new Error('YOOMONEY_WALLET не задан'));
+            }
             
             await sendPaymentMessage(chatId, buildPaymentText(), {
-                inline_keyboard: [
-                    [{ text: '💳 Перейти к оплате', url: payUrl }],
-                    [{ text: '✅ Я оплатил', callback_data: 'check_payment' }],
-                    [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
-                ]
+                inline_keyboard: keyboard
             });
             return;
         }
@@ -590,6 +638,7 @@ bot.on('callback_query', async (query) => {
 
     } catch (error) {
         console.error('Ошибка в callback_query:', error.message);
+        await notifyAdminError(`callback ${query.data || 'unknown'} от ${query.from?.id || chatId}`, error);
     }
 });
 
