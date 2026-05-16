@@ -19,33 +19,9 @@ async function reserveFreeLink(owner = {}) {
     const links = await getLinks();
     const freeIndex = links.findIndex(x => x.status === 'free');
     if (freeIndex === -1) return null;
-    links[freeIndex].status = 'used';
-    links[freeIndex].assignedTo = {
-        telegramId: Number(owner.telegramId || owner.id || 0),
-        username: owner.username || '',
-        firstName: owner.firstName || '',
-        lastName: owner.lastName || ''
-    };
-    links[freeIndex].assignedAt = new Date().toISOString();
+    const [reserved] = links.splice(freeIndex, 1);
     await saveLinks(links);
-    return links[freeIndex].url;
+    return reserved.url;
 }
 
-async function releaseLink(url) {
-    const links = await getLinks();
-    const item = links.find(x => x.url === url);
-    if (item && item.status === 'used') {
-        item.status = 'free';
-        delete item.assignedTo;
-        delete item.assignedAt;
-        await saveLinks(links);
-    }
-}
-
-async function removeLinkFromPool(url) {
-    const links = await getLinks();
-    const filtered = links.filter(x => x.url !== url);
-    await saveLinks(filtered);
-}
-
-module.exports = { getLinks, saveLinks, reserveFreeLink, releaseLink, removeLinkFromPool };
+module.exports = { getLinks, saveLinks, reserveFreeLink };

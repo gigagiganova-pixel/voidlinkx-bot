@@ -4,9 +4,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
-const { getUser, saveUser, addPayment, readDB, writeDB, resetDB, expireSubscriptions } = require('./utils/db');
-const { getLinks, saveLinks, reserveFreeLink, removeLinkFromPool } = require('./utils/links');
-const { createAccessToken, temporaryLink } = require('./utils/crypto');
+const { getUser, saveUser, addPayment, readDB, writeDB } = require('./utils/db');
+const { getLinks, saveLinks, reserveFreeLink } = require('./utils/links');
 
 // --- НАСТРОЙКИ ---
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
@@ -25,7 +24,6 @@ const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
 const price = process.env.PRICE || '500';
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
-const publicBaseUrl = (process.env.PUBLIC_URL || process.env.ACCESS_BASE_URL || 'https://voidlink.app').replace(/\/+$/, '');
 let pollingConflictShown = false;
 const reviewDrafts = new Map();
 
@@ -95,13 +93,9 @@ async function upsertUserProfile(profile) {
         firstName: profile.firstName || existing?.firstName || '',
         lastName: profile.lastName || existing?.lastName || '',
         languageCode: profile.languageCode || existing?.languageCode || '',
-        monthsPaid: existing?.monthsPaid || 0,
+        purchases: existing?.purchases || existing?.monthsPaid || 0,
         personalLink: existing?.personalLink || null,
-        accessToken: existing?.accessToken || null,
-        permanent: Boolean(existing?.permanent),
-        expiresAt: existing?.expiresAt || null,
         active: Boolean(existing?.active),
-        remindersSent: existing?.remindersSent || {},
         createdAt: existing?.createdAt || now,
         updatedAt: now
     };
@@ -119,10 +113,10 @@ function buildStartText() {
         '',
         '🛡 личная ссылка из ограниченного пула',
         '🔒 без серверной записи разговоров и переписок',
-        '⚡ временный защищённый шлюз на 1 месяц',
-        '🏆 после 3 оплат открывается постоянная оригинальная ссылка',
+        '⚡ полноценный личный канал связи после одной оплаты',
+        '🏆 оригинальная рабочая ссылка закрепляется за вами',
         '',
-        `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽ / месяц`
+        `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽`
     ].join('\n');
 }
 
@@ -133,9 +127,9 @@ function buildAboutText() {
         'VOIDLINK X работает через WebRTC: соединение создаётся напрямую между участниками, а ссылка выдаётся персонально после ручной проверки оплаты.',
         '',
         '<b>Как устроен доступ:</b>',
-        `💎 1 месяц — временный защищённый шлюз за ${escapeHtml(price)} ₽.`,
-        '🔁 2 месяц — продление того же персонального шлюза.',
-        '🏆 3 месяц — постоянная оригинальная ссылка из пула, закреплённая за вами.',
+        `💎 Оплата ${escapeHtml(price)} ₽ — личный канал связи из ограниченного пула.`,
+        '🔗 После подтверждения вы получаете оригинальную рабочую ссылку.',
+        '🛡 Ссылка удаляется из общего пула и закрепляется за вами.',
         '',
         'Проект не продаёт «просто HTML». Вы получаете готовый приватный экземпляр браузерной системы связи, развёрнутый отдельно и выданный персонально.'
     ].join('\n');
@@ -151,7 +145,7 @@ function buildPaymentText() {
         '1. Нажмите кнопку оплаты.',
         '2. После перевода вернитесь в бот.',
         '3. Нажмите «Я оплатил».',
-        '4. Администратор проверит платёж и выдаст персональный доступ.',
+        '4. Администратор проверит платёж и выдаст оригинальную рабочую ссылку.',
         '',
         '⏱ Обычно проверка занимает 5-15 минут.'
     ].join('\n');
@@ -161,7 +155,7 @@ function buildSupportText() {
     return [
         '💬 <b>Поддержка VOIDLINK X</b>',
         '',
-        'Если есть вопрос по оплате, доступу, ссылке или продлению, напишите в поддержку. Мы поможем спокойно и по делу.',
+        'Если есть вопрос по оплате, доступу или ссылке, напишите в поддержку. Мы поможем спокойно и по делу.',
         '',
         `🔗 <b>Контакт:</b> @${escapeHtml(supportUsername)}`,
         '',
@@ -271,53 +265,14 @@ function buildReviewModerationText(review) {
 }
 
 function buildClientAccessText({ linkToSend, months, isPermanent }) {
-    if (isPermanent) {
-        return [
-            '🏆 <b>Доступ подтверждён</b>',
-            '',
-            'Вы получили постоянный доступ VOIDLINK X.',
-            '',
-            `🔗 <b>Ваша оригинальная ссылка:</b>\n${escapeHtml(linkToSend)}`,
-            '',
-            '🔒 Сохраните её в надёжном месте. Эта ссылка закреплена за вами.'
-        ].join('\n');
-    }
-
     return [
-        '✅ <b>Доступ подтверждён</b>',
+        '🏆 <b>Доступ подтверждён</b>',
         '',
-        'Ваш защищённый шлюз активирован на 1 месяц.',
+        'Ваш личный канал связи VOIDLINK X активирован.',
         '',
-        `🔐 <b>Временная ссылка:</b>\n${escapeHtml(linkToSend)}`,
+        `🔗 <b>Ваша оригинальная ссылка:</b>\n${escapeHtml(linkToSend)}`,
         '',
-        `💎 <b>Прогресс:</b> ${months}/3 оплат до постоянного доступа.`,
-        `⏳ Осталось: ${3 - months} мес.`
-    ].join('\n');
-}
-
-function addOneMonthFromCurrentAccess(user) {
-    const now = new Date();
-    const currentExpires = user?.expiresAt ? new Date(user.expiresAt) : null;
-    const base = currentExpires && currentExpires > now ? currentExpires : now;
-    const expires = new Date(base);
-    expires.setMonth(expires.getMonth() + 1);
-    return expires;
-}
-
-function daysUntil(date) {
-    const ms = new Date(date).getTime() - Date.now();
-    return Math.ceil(ms / (24 * 60 * 60 * 1000));
-}
-
-function reminderText(daysLeft, expiresAt) {
-    const dayWord = daysLeft === 1 ? 'день' : 'дня';
-    return [
-        '⏳ <b>VOIDLINK X: подписка скоро закончится</b>',
-        '',
-        `До окончания временного доступа осталось ${daysLeft} ${dayWord}.`,
-        `📅 Дата окончания: ${new Date(expiresAt).toLocaleDateString('ru-RU')}.`,
-        '',
-        '💎 Чтобы продлить доступ, откройте бота и нажмите «Купить доступ». После 3 подтверждённых оплат вы получите постоянную оригинальную ссылку.'
+        '🔒 Сохраните её в надёжном месте. Эта ссылка закреплена за вами и удалена из общего пула.'
     ].join('\n');
 }
 
@@ -367,41 +322,6 @@ async function updateReviewStatus(reviewId, status) {
     await writeDB(db);
     return review;
 }
-
-async function sendExpiryReminders() {
-    const db = await readDB();
-    let changed = false;
-
-    for (const user of db.users) {
-        if (!user.active || user.permanent || !user.expiresAt) continue;
-
-        const daysLeft = daysUntil(user.expiresAt);
-        if (![3, 1].includes(daysLeft)) continue;
-
-        user.remindersSent = user.remindersSent || {};
-        if (user.remindersSent[String(daysLeft)]) continue;
-
-        try {
-            await bot.sendMessage(user.telegramId || user.id, reminderText(daysLeft, user.expiresAt), { parse_mode: 'HTML' });
-            user.remindersSent[String(daysLeft)] = new Date().toISOString();
-            changed = true;
-        } catch (error) {
-            console.error(`Не удалось отправить напоминание пользователю ${user.id}:`, error.message);
-        }
-    }
-
-    if (changed) {
-        await writeDB(db);
-    }
-}
-
-async function runMaintenance() {
-    await sendExpiryReminders();
-    await expireSubscriptions();
-}
-
-// Запускаем фоновую проверку подписок и напоминаний (раз в 6 часов)
-setInterval(runMaintenance, 6 * 60 * 60 * 1000);
 
 // --- КОМАНДА /start ---
 bot.onText(/\/start/, async (msg) => {
@@ -584,8 +504,7 @@ bot.on('callback_query', async (query) => {
             
             let user = await getUser(userId);
             let link;
-            let months = (user?.monthsPaid || 0) + 1;
-            const isPermanent = months >= 3;
+            const purchases = (user?.purchases || user?.monthsPaid || 0) + 1;
 
             if (!user || !user.personalLink) {
                 const owner = {
@@ -603,12 +522,6 @@ bot.on('callback_query', async (query) => {
                 link = user.personalLink;
             }
 
-            if (isPermanent) {
-                await removeLinkFromPool(link);
-            }
-
-            const expires = addOneMonthFromCurrentAccess(user);
-
             user = {
                 id: userId,
                 telegramId: userId,
@@ -616,13 +529,9 @@ bot.on('callback_query', async (query) => {
                 firstName: user?.firstName || '',
                 lastName: user?.lastName || '',
                 languageCode: user?.languageCode || '',
-                monthsPaid: months,
+                purchases,
                 personalLink: link,
-                accessToken: user?.accessToken || createAccessToken(),
-                permanent: isPermanent,
-                expiresAt: expires.toISOString(),
                 active: true,
-                remindersSent: {},
                 createdAt: user?.createdAt || new Date().toISOString(),
                 firstPaidAt: user?.firstPaidAt || new Date().toISOString(),
                 updatedAt: new Date().toISOString()
@@ -631,11 +540,11 @@ bot.on('callback_query', async (query) => {
             await saveUser(user);
             await addPayment({ user: userId, amount: price, date: new Date().toISOString() });
 
-            const linkToSend = isPermanent ? link : temporaryLink(user.accessToken, publicBaseUrl);
+            const linkToSend = link;
 
-            await bot.sendMessage(userId, buildClientAccessText({ linkToSend, months, isPermanent }), { parse_mode: 'HTML', disable_web_page_preview: true });
+            await bot.sendMessage(userId, buildClientAccessText({ linkToSend }), { parse_mode: 'HTML', disable_web_page_preview: true });
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `✅ Доступ выдан пользователю ${userId}: ${months}-й месяц${isPermanent ? ', постоянная ссылка' : ''}.`);
+            await bot.sendMessage(ADMIN_ID, `✅ Оригинальная ссылка выдана пользователю ${userId}. Ссылка удалена из пула.`);
         }
 
         // АДМИН ОТКЛОНИЛ
@@ -733,9 +642,7 @@ bot.onText(/\/admin/, async (msg) => {
         '💰 /stats — финансы',
         '💬 /support — контакт поддержки',
         '⭐ /reviews — блок отзывов',
-        '➕ /addlink &lt;url&gt; — добавить ссылку',
-        '🧪 /diag — диагностика Railway',
-        '🧹 /resettest — очистить тестовую базу'
+        '➕ /addlink &lt;url&gt; — добавить ссылку'
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -762,19 +669,14 @@ bot.onText(/\/links/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     const links = await getLinks();
     const free = links.filter(l => l.status === 'free').length;
-    const used = links.filter(l => l.status === 'used').length;
     const details = links.slice(0, 20).map((link, index) => {
-        const status = link.status === 'used' ? '🟡 used' : '🟢 free';
-        const owner = link.assignedTo ? `\n   👤 ${escapeHtml(ownerLabel(link.assignedTo))}` : '';
-        const assignedAt = link.assignedAt ? `\n   📅 ${new Date(link.assignedAt).toLocaleString('ru-RU')}` : '';
-        return `${index + 1}. ${status}\n   ${escapeHtml(link.url)}${owner}${assignedAt}`;
+        return `${index + 1}. 🟢 free\n   ${escapeHtml(link.url)}`;
     });
 
     await bot.sendMessage(ADMIN_ID, [
         '📦 <b>Пул ссылок</b>',
         '',
         `🟢 Свободно: ${free}`,
-        `🟡 В аренде: ${used}`,
         `📊 Всего: ${links.length}`,
         '',
         ...details
@@ -784,7 +686,7 @@ bot.onText(/\/links/, async (msg) => {
 bot.onText(/\/users/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     const db = await readDB();
-    const users = db.users.filter(u => Number(u.monthsPaid || 0) > 0);
+    const users = db.users.filter(u => Number(u.purchases || u.monthsPaid || 0) > 0);
     if (!users.length) return bot.sendMessage(ADMIN_ID, '👥 Клиентов с подтверждёнными оплатами пока нет.');
 
     let text = '👥 <b>Клиенты VOIDLINK X</b>\n\n';
@@ -795,9 +697,10 @@ bot.onText(/\/users/, async (msg) => {
             firstName: u.firstName,
             lastName: u.lastName
         };
-        const status = u.permanent ? 'постоянный доступ' : `активен до ${new Date(u.expiresAt).toLocaleDateString('ru-RU')}`;
+        const status = 'ссылка выдана';
         text += `${i + 1}. <a href="${profileUrl(profile)}">${escapeHtml(fullName(profile))}</a>\n`;
-        text += `🆔 ID: <code>${profile.id}</code> | 💎 оплат: ${u.monthsPaid} мес.\n`;
+        text += `🆔 ID: <code>${profile.id}</code> | 💎 покупок: ${u.purchases || u.monthsPaid || 1}\n`;
+        text += `🔗 Ссылка: ${escapeHtml(u.personalLink || 'нет')}\n`;
         text += `🛡 Статус: ${status}\n\n`;
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'HTML', disable_web_page_preview: true });
@@ -812,47 +715,6 @@ bot.onText(/\/stats/, async (msg) => {
         '',
         `💎 Всего заработано: ${total} ₽`,
         `🧾 Транзакций: ${db.payments.length}`
-    ].join('\n'), { parse_mode: 'HTML' });
-});
-
-bot.onText(/\/diag/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
-    const db = await readDB();
-    const links = await getLinks();
-    await bot.sendMessage(ADMIN_ID, [
-        '🧪 <b>Диагностика VOIDLINK X</b>',
-        '',
-        `PUBLIC_URL: <code>${escapeHtml(publicBaseUrl)}</code>`,
-        `PORT: <code>${escapeHtml(process.env.PORT || '3000')}</code>`,
-        `Цена: <code>${escapeHtml(price)} ₽</code>`,
-        '',
-        `👥 users: ${db.users.length}`,
-        `💰 payments: ${db.payments.length}`,
-        `⭐ reviews: ${db.reviews.length}`,
-        `📦 links: ${links.length}`,
-        '',
-        `Health: <code>${escapeHtml(publicBaseUrl)}/</code>`,
-        `Temp test path: <code>${escapeHtml(publicBaseUrl)}/a/test</code>`
-    ].join('\n'), { parse_mode: 'HTML', disable_web_page_preview: true });
-});
-
-bot.onText(/\/resettest/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
-    await resetDB();
-    const links = await getLinks();
-    links.forEach((link) => {
-        link.status = 'free';
-        delete link.assignedTo;
-        delete link.assignedAt;
-    });
-    await saveLinks(links);
-    await bot.sendMessage(ADMIN_ID, [
-        '🧹 <b>Тестовая база очищена</b>',
-        '',
-        '👥 Пользователи: 0',
-        '💰 Платежи: 0',
-        '⭐ Отзывы: 0',
-        '📦 Все ссылки возвращены в статус free.'
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -883,8 +745,8 @@ bot.on('polling_error', (error) => {
 async function configureBotProfile() {
     const description = [
         'Твой личный канал связи.',
-        'VOIDLINK X — приватная браузерная WebRTC/P2P-система с персональными ссылками, ручной проверкой оплаты и временным защищённым шлюзом на 1 месяц.',
-        'После 3 подтверждённых оплат открывается постоянная оригинальная ссылка.'
+        'VOIDLINK X — приватная браузерная WebRTC/P2P-система с персональными ссылками и ручной проверкой оплаты.',
+        'После подтверждения вы получаете оригинальную рабочую ссылку из ограниченного пула.'
     ].join('\n');
 
     try {
@@ -902,9 +764,7 @@ async function configureBotProfile() {
             { command: 'admin', description: '🛠 Админ-панель' },
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
-            { command: 'stats', description: '💰 Финансы' },
-            { command: 'diag', description: '🧪 Диагностика' },
-            { command: 'resettest', description: '🧹 Очистить тестовую базу' }
+            { command: 'stats', description: '💰 Финансы' }
         ], { scope: { type: 'chat', chat_id: ADMIN_ID } });
     } catch (error) {
         console.error('Не удалось обновить описание бота:', error.message);
@@ -923,7 +783,6 @@ async function startBot() {
     await bot.deleteWebHook({ drop_pending_updates: true });
     await bot.startPolling({ restart: true });
     await configureBotProfile();
-    await runMaintenance();
 }
 
 // --- ЗАПУСК СЕРВЕРА (только для Railway, вебхук не используется) ---
@@ -931,42 +790,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`VOIDLINK X BOT запущен на порту ${PORT}`);
     console.log('Бот работает в режиме ручного подтверждения платежей');
-    console.log(`PUBLIC_URL для временных ссылок: ${publicBaseUrl}`);
 });
-
-async function handleTemporaryAccess(req, res) {
-    try {
-        const db = await readDB();
-        const now = new Date();
-        const user = db.users.find((item) => {
-            if (!item.active || item.permanent || !item.personalLink || !item.expiresAt || !item.accessToken) return false;
-            if (new Date(item.expiresAt) <= now) return false;
-            return item.accessToken === req.params.token;
-        });
-
-        if (!user) {
-            return res.status(403).send([
-                '<!doctype html>',
-                '<html lang="ru">',
-                '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VOIDLINK X</title></head>',
-                '<body style="margin:0;background:#05060b;color:#fff;font-family:Arial,sans-serif;display:grid;min-height:100vh;place-items:center;text-align:center;padding:24px">',
-                '<main style="max-width:520px">',
-                '<h1 style="letter-spacing:2px">VOIDLINK X</h1>',
-                '<p style="color:#aab0c2;line-height:1.6">Временная ссылка недействительна или срок доступа истёк. Откройте бота и продлите доступ.</p>',
-                '</main>',
-                '</body></html>'
-            ].join(''));
-        }
-
-        return res.redirect(302, user.personalLink);
-    } catch (error) {
-        console.error('Ошибка access-шлюза:', error.message);
-        return res.status(500).send('VOIDLINK X access gateway error');
-    }
-}
-
-app.get('/a/:token', handleTemporaryAccess);
-app.get('/access/:token', handleTemporaryAccess);
 
 app.get('/', (req, res) => {
     res.json({ ok: true, service: 'VOIDLINK X BOT' });
