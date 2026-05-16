@@ -1,10 +1,19 @@
 const crypto = require('crypto');
 
-function encryptLink(realUrl, userId) {
-    // Простое, но красивое шифрование для временного доступа
-    const hash = crypto.createHash('md5').update(`${realUrl}${userId}${process.env.CRYPTO_SECRET}`).digest('hex').substring(0, 10);
-    // Реальная ссылка скрыта, но бот знает, какую ссылку выдать
-    return `https://voidlink.app/access/${hash}`;
+function normalizeBaseUrl(baseUrl) {
+    return String(baseUrl || 'https://voidlink.app').replace(/\/+$/, '');
 }
 
-module.exports = { encryptLink };
+function linkToken(realUrl, userId) {
+    return crypto
+        .createHash('sha256')
+        .update(`${realUrl}:${userId}:${process.env.CRYPTO_SECRET || 'voidlink-secret'}`)
+        .digest('hex')
+        .substring(0, 32);
+}
+
+function encryptLink(realUrl, userId, baseUrl) {
+    return `${normalizeBaseUrl(baseUrl)}/access/${linkToken(realUrl, userId)}`;
+}
+
+module.exports = { encryptLink, linkToken };

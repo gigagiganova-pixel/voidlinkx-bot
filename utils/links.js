@@ -39,4 +39,4 @@ async function removeLinkFromPool(url) {
     await saveLinks(filtered);
 }
 
-module.exports = { getLinks, reserveFreeLink, releaseLink, removeLinkFromPool };
+module.exports = { getLinks, saveLinks, reserveFreeLink, releaseLink, removeLinkFromPool };

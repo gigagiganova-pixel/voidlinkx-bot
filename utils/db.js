@@ -50,8 +50,13 @@ async function expireSubscriptions() {
     const db = await readDB();
     let changed = false;
     const now = new Date();
+
     for (const user of db.users) {
-        if (!user.permanent && new Date(user.expiresAt) < now) {
+        if (!user.active || !user.expiresAt || user.permanent) {
+            continue;
+        }
+
+        if (new Date(user.expiresAt) < now) {
             // Срок истек, возвращаем ссылку в пул, если она не была удалена
             const { releaseLink } = require('./links');
             await releaseLink(user.personalLink);
