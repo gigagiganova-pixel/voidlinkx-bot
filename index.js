@@ -4,8 +4,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
-const { getUser, saveUser, addPayment, readDB, writeDB, expireSubscriptions } = require('./utils/db');
-const { getLinks, reserveFreeLink, removeLinkFromPool } = require('./utils/links');
+const { getUser, saveUser, addPayment, readDB, writeDB, resetDB, expireSubscriptions } = require('./utils/db');
+const { getLinks, saveLinks, reserveFreeLink, removeLinkFromPool } = require('./utils/links');
 const { encryptLink, linkToken } = require('./utils/crypto');
 
 // --- НАСТРОЙКИ ---
@@ -718,7 +718,8 @@ bot.onText(/\/admin/, async (msg) => {
         '💰 /stats — финансы',
         '💬 /support — контакт поддержки',
         '⭐ /reviews — блок отзывов',
-        '➕ /addlink &lt;url&gt; — добавить ссылку'
+        '➕ /addlink &lt;url&gt; — добавить ссылку',
+        '🧹 /resettest — очистить тестовую базу'
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -789,12 +790,30 @@ bot.onText(/\/stats/, async (msg) => {
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
+bot.onText(/\/resettest/, async (msg) => {
+    if (msg.chat.id !== ADMIN_ID) return;
+    await resetDB();
+    const links = await getLinks();
+    links.forEach((link) => {
+        link.status = 'free';
+    });
+    await saveLinks(links);
+    await bot.sendMessage(ADMIN_ID, [
+        '🧹 <b>Тестовая база очищена</b>',
+        '',
+        '👥 Пользователи: 0',
+        '💰 Платежи: 0',
+        '⭐ Отзывы: 0',
+        '📦 Все ссылки возвращены в статус free.'
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
 bot.onText(/\/addlink (.+)/, async (msg, match) => {
     if (msg.chat.id !== ADMIN_ID) return;
     const newUrl = match[1];
     const links = await getLinks();
     links.push({ url: newUrl, status: 'free' });
-    await require('./utils/links').saveLinks(links);
+    await saveLinks(links);
     await bot.sendMessage(ADMIN_ID, `✅ Ссылка добавлена в пул:\n${newUrl}`);
 });
 
@@ -835,7 +854,8 @@ async function configureBotProfile() {
             { command: 'admin', description: '🛠 Админ-панель' },
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
-            { command: 'stats', description: '💰 Финансы' }
+            { command: 'stats', description: '💰 Финансы' },
+            { command: 'resettest', description: '🧹 Очистить тестовую базу' }
         ], { scope: { type: 'chat', chat_id: ADMIN_ID } });
     } catch (error) {
         console.error('Не удалось обновить описание бота:', error.message);
@@ -862,6 +882,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`VOIDLINK X BOT запущен на порту ${PORT}`);
     console.log('Бот работает в режиме ручного подтверждения платежей');
+    console.log(`PUBLIC_URL для временных ссылок: ${publicBaseUrl}`);
 });
 
 app.get('/access/:token', async (req, res) => {

@@ -49,6 +49,12 @@ async function addPayment(payment) {
     await writeDB(db);
 }
 
+async function resetDB() {
+    const empty = { users: [], payments: [], reviews: [] };
+    await writeDB(empty);
+    return empty;
+}
+
 // Новая функция: проверка просроченных подписок
 async function expireSubscriptions() {
     const db = await readDB();
@@ -75,4 +81,4 @@ async function expireSubscriptions() {
     }
 }
 
-module.exports = { getUser, saveUser, addPayment, readDB, writeDB, expireSubscriptions };
+module.exports = { getUser, saveUser, addPayment, readDB, writeDB, resetDB, expireSubscriptions };
