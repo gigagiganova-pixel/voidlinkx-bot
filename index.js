@@ -871,8 +871,8 @@ async function startBot() {
 }
 
 // --- ЗАПУСК СЕРВЕРА (только для Railway, вебхук не используется) ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const PORT = Number(process.env.PORT) || 3000;
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`VOIDLINK X BOT запущен на порту ${PORT}`);
     console.log('Бот работает в режиме ручного подтверждения платежей');
 });
