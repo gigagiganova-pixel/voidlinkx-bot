@@ -19,16 +19,23 @@ app.use(express.json());
 const photoStart = path.resolve(__dirname, 'assets/start.jpg');
 const photoAbout = path.resolve(__dirname, 'assets/about.jpg');
 const photoPayment = path.resolve(__dirname, 'assets/payment.jpg');
+const photoSupport = path.resolve(__dirname, 'assets/support.jpg');
+const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
 
 const price = process.env.PRICE || '500';
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
+const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 const publicBaseUrl = (process.env.PUBLIC_URL || process.env.ACCESS_BASE_URL || 'https://voidlink.app').replace(/\/+$/, '');
 let pollingConflictShown = false;
 
 const MAIN_KEYBOARD = {
     inline_keyboard: [
         [{ text: '💎 Купить доступ', callback_data: 'buy' }],
-        [{ text: '🛡 О проекте и безопасности', callback_data: 'about' }]
+        [
+            { text: '🛡 О проекте', callback_data: 'about' },
+            { text: '⭐ Отзывы', callback_data: 'reviews' }
+        ],
+        [{ text: '💬 Поддержка', callback_data: 'support' }]
     ]
 };
 
@@ -141,6 +148,30 @@ function buildPaymentText() {
     ].join('\n');
 }
 
+function buildSupportText() {
+    return [
+        '💬 <b>Поддержка VOIDLINK X</b>',
+        '',
+        'Если есть вопрос по оплате, доступу, ссылке или продлению, напишите в поддержку. Мы поможем спокойно и по делу.',
+        '',
+        `🔗 <b>Контакт:</b> @${escapeHtml(supportUsername)}`,
+        '',
+        'Для быстрой проверки платежа можно сразу отправить скрин/чек и ваш Telegram ID из бота.'
+    ].join('\n');
+}
+
+function buildReviewsText() {
+    return [
+        '⭐ <b>Отзывы и впечатления</b>',
+        '',
+        'Здесь будут собраны реальные отзывы пользователей VOIDLINK X: про запуск, качество связи, приватность и удобство личного доступа.',
+        '',
+        'Пока раздел готов к наполнению: добавьте баннер или скриншоты отзывов, и бот будет показывать их в этом блоке.',
+        '',
+        '💎 Хотите протестировать систему лично? Оформите доступ на 1 месяц и получите персональную защищённую ссылку.'
+    ].join('\n');
+}
+
 function buildClientAccessText({ linkToSend, months, isPermanent }) {
     if (isPermanent) {
         return [
@@ -192,22 +223,26 @@ function reminderText(daysLeft, expiresAt) {
     ].join('\n');
 }
 
-async function sendPaymentMessage(chatId, text, replyMarkup) {
+async function sendPhotoMessage(chatId, photoPath, text, replyMarkup) {
     const options = {
         parse_mode: 'HTML',
         reply_markup: replyMarkup
     };
 
-    if (fs.existsSync(photoPayment)) {
+    if (fs.existsSync(photoPath)) {
         try {
-            await bot.sendPhoto(chatId, photoPayment, { ...options, caption: text });
+            await bot.sendPhoto(chatId, photoPath, { ...options, caption: text });
             return;
         } catch (error) {
-            console.error('Не удалось отправить payment.jpg:', error.message);
+            console.error(`Не удалось отправить ${path.basename(photoPath)}:`, error.message);
         }
     }
 
     await bot.sendMessage(chatId, text, options);
+}
+
+async function sendPaymentMessage(chatId, text, replyMarkup) {
+    await sendPhotoMessage(chatId, photoPayment, text, replyMarkup);
 }
 
 async function sendExpiryReminders() {
@@ -274,7 +309,8 @@ bot.on('callback_query', async (query) => {
             await sendPaymentMessage(chatId, buildPaymentText(), {
                 inline_keyboard: [
                     [{ text: '💳 Перейти к оплате', url: payUrl }],
-                    [{ text: '✅ Я оплатил', callback_data: 'check_payment' }]
+                    [{ text: '✅ Я оплатил', callback_data: 'check_payment' }],
+                    [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
                 ]
             });
         }
@@ -288,6 +324,26 @@ bot.on('callback_query', async (query) => {
             }
         }
 
+        // КНОПКА: ОТЗЫВЫ
+        if (query.data === 'reviews') {
+            await sendPhotoMessage(chatId, photoReviews, buildReviewsText(), {
+                inline_keyboard: [
+                    [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+                    [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+                ]
+            });
+        }
+
+        // КНОПКА: ПОДДЕРЖКА
+        if (query.data === 'support') {
+            await sendPhotoMessage(chatId, photoSupport, buildSupportText(), {
+                inline_keyboard: [
+                    [{ text: '💬 Написать в поддержку', url: `https://t.me/${supportUsername}` }],
+                    [{ text: '💎 Купить доступ', callback_data: 'buy' }]
+                ]
+            });
+        }
+
         // ПОЛЬЗОВАТЕЛЬ НАЖАЛ "Я ОПЛАТИЛ"
         if (query.data === 'check_payment') {
             await upsertUserProfile(profile);
@@ -297,7 +353,7 @@ bot.on('callback_query', async (query) => {
                 inline_keyboard: [
                     [
                         { text: '✅ Подтвердить', callback_data: `confirm_${profile.id}` },
-                        { text: '✖️ Отклонить', callback_data: `reject_${profile.id}` }
+                        { text: '❌ Отклонить', callback_data: `reject_${profile.id}` }
                     ],
                     [{ text: '💬 Написать пользователю', url: profileUrl(profile) }]
                 ]
@@ -378,9 +434,9 @@ bot.on('callback_query', async (query) => {
         if (query.data.startsWith('reject_')) {
             if (query.from.id !== ADMIN_ID) return;
             const userId = parseInt(query.data.split('_')[1]);
-            await bot.sendMessage(userId, '✖️ Платёж не подтверждён. Пожалуйста, проверьте сумму, кошелёк и попробуйте отправить заявку ещё раз.');
+            await bot.sendMessage(userId, '❌ Платёж не подтверждён. Пожалуйста, проверьте сумму, кошелёк и попробуйте отправить заявку ещё раз.');
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `✖️ Заявка пользователя ${userId} отклонена.`);
+            await bot.sendMessage(ADMIN_ID, `❌ Заявка пользователя ${userId} отклонена.`);
         }
 
     } catch (error) {
@@ -397,8 +453,27 @@ bot.onText(/\/admin/, async (msg) => {
         '📦 /links — статус пула ссылок',
         '👥 /users — клиенты и Telegram ID',
         '💰 /stats — финансы',
+        '💬 /support — контакт поддержки',
+        '⭐ /reviews — блок отзывов',
         '➕ /addlink &lt;url&gt; — добавить ссылку'
     ].join('\n'), { parse_mode: 'HTML' });
+});
+
+bot.onText(/\/support/, async (msg) => {
+    await sendPhotoMessage(msg.chat.id, photoSupport, buildSupportText(), {
+        inline_keyboard: [
+            [{ text: '💬 Написать в поддержку', url: `https://t.me/${supportUsername}` }]
+        ]
+    });
+});
+
+bot.onText(/\/reviews/, async (msg) => {
+    await sendPhotoMessage(msg.chat.id, photoReviews, buildReviewsText(), {
+        inline_keyboard: [
+            [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+            [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+        ]
+    });
 });
 
 bot.onText(/\/links/, async (msg) => {
@@ -483,9 +558,15 @@ async function configureBotProfile() {
     try {
         await bot.setMyShortDescription({ short_description: 'Твой личный канал связи: приватный WebRTC/P2P-доступ VOIDLINK X.' });
         await bot.setMyDescription({ description });
-        await bot.setMyCommands([{ command: 'start', description: '🛰 Открыть VOIDLINK X' }]);
         await bot.setMyCommands([
             { command: 'start', description: '🛰 Открыть VOIDLINK X' },
+            { command: 'support', description: '💬 Поддержка' },
+            { command: 'reviews', description: '⭐ Отзывы' }
+        ]);
+        await bot.setMyCommands([
+            { command: 'start', description: '🛰 Открыть VOIDLINK X' },
+            { command: 'support', description: '💬 Поддержка' },
+            { command: 'reviews', description: '⭐ Отзывы' },
             { command: 'admin', description: '🛠 Админ-панель' },
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
