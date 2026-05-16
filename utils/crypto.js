@@ -4,16 +4,12 @@ function normalizeBaseUrl(baseUrl) {
     return String(baseUrl || 'https://voidlink.app').replace(/\/+$/, '');
 }
 
-function linkToken(realUrl, userId) {
-    return crypto
-        .createHash('sha256')
-        .update(`${realUrl}:${userId}:${process.env.CRYPTO_SECRET || 'voidlink-secret'}`)
-        .digest('hex')
-        .substring(0, 32);
+function createAccessToken() {
+    return crypto.randomBytes(8).toString('hex');
 }
 
-function encryptLink(realUrl, userId, baseUrl) {
-    return `${normalizeBaseUrl(baseUrl)}/access/${linkToken(realUrl, userId)}`;
+function temporaryLink(token, baseUrl) {
+    return `${normalizeBaseUrl(baseUrl)}/a/${token}`;
 }
 
-module.exports = { encryptLink, linkToken };
+module.exports = { createAccessToken, temporaryLink };

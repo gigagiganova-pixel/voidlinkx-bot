@@ -6,7 +6,7 @@ const fs = require('fs');
 
 const { getUser, saveUser, addPayment, readDB, writeDB, resetDB, expireSubscriptions } = require('./utils/db');
 const { getLinks, saveLinks, reserveFreeLink, removeLinkFromPool } = require('./utils/links');
-const { encryptLink, linkToken } = require('./utils/crypto');
+const { createAccessToken, temporaryLink } = require('./utils/crypto');
 
 // --- НАСТРОЙКИ ---
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
@@ -76,6 +76,13 @@ function adminProfileText(profile = {}) {
     ].join('\n');
 }
 
+function ownerLabel(owner = {}) {
+    if (!owner || !owner.telegramId) return '';
+    const username = owner.username ? `@${owner.username}` : 'без username';
+    const name = [owner.firstName, owner.lastName].filter(Boolean).join(' ');
+    return `${username}${name ? `, ${name}` : ''}, ID ${owner.telegramId}`;
+}
+
 async function upsertUserProfile(profile) {
     if (!profile.id) return null;
 
@@ -90,6 +97,7 @@ async function upsertUserProfile(profile) {
         languageCode: profile.languageCode || existing?.languageCode || '',
         monthsPaid: existing?.monthsPaid || 0,
         personalLink: existing?.personalLink || null,
+        accessToken: existing?.accessToken || null,
         permanent: Boolean(existing?.permanent),
         expiresAt: existing?.expiresAt || null,
         active: Boolean(existing?.active),
@@ -580,7 +588,13 @@ bot.on('callback_query', async (query) => {
             const isPermanent = months >= 3;
 
             if (!user || !user.personalLink) {
-                link = await reserveFreeLink();
+                const owner = {
+                    telegramId: userId,
+                    username: user?.username || '',
+                    firstName: user?.firstName || '',
+                    lastName: user?.lastName || ''
+                };
+                link = await reserveFreeLink(owner);
                 if (!link) {
                     await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
                     return;
@@ -604,6 +618,7 @@ bot.on('callback_query', async (query) => {
                 languageCode: user?.languageCode || '',
                 monthsPaid: months,
                 personalLink: link,
+                accessToken: user?.accessToken || createAccessToken(),
                 permanent: isPermanent,
                 expiresAt: expires.toISOString(),
                 active: true,
@@ -616,7 +631,7 @@ bot.on('callback_query', async (query) => {
             await saveUser(user);
             await addPayment({ user: userId, amount: price, date: new Date().toISOString() });
 
-            const linkToSend = isPermanent ? link : encryptLink(link, userId, publicBaseUrl);
+            const linkToSend = isPermanent ? link : temporaryLink(user.accessToken, publicBaseUrl);
 
             await bot.sendMessage(userId, buildClientAccessText({ linkToSend, months, isPermanent }), { parse_mode: 'HTML', disable_web_page_preview: true });
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
@@ -719,6 +734,7 @@ bot.onText(/\/admin/, async (msg) => {
         '💬 /support — контакт поддержки',
         '⭐ /reviews — блок отзывов',
         '➕ /addlink &lt;url&gt; — добавить ссылку',
+        '🧪 /diag — диагностика Railway',
         '🧹 /resettest — очистить тестовую базу'
     ].join('\n'), { parse_mode: 'HTML' });
 });
@@ -747,12 +763,21 @@ bot.onText(/\/links/, async (msg) => {
     const links = await getLinks();
     const free = links.filter(l => l.status === 'free').length;
     const used = links.filter(l => l.status === 'used').length;
+    const details = links.slice(0, 20).map((link, index) => {
+        const status = link.status === 'used' ? '🟡 used' : '🟢 free';
+        const owner = link.assignedTo ? `\n   👤 ${escapeHtml(ownerLabel(link.assignedTo))}` : '';
+        const assignedAt = link.assignedAt ? `\n   📅 ${new Date(link.assignedAt).toLocaleString('ru-RU')}` : '';
+        return `${index + 1}. ${status}\n   ${escapeHtml(link.url)}${owner}${assignedAt}`;
+    });
+
     await bot.sendMessage(ADMIN_ID, [
         '📦 <b>Пул ссылок</b>',
         '',
         `🟢 Свободно: ${free}`,
         `🟡 В аренде: ${used}`,
-        `📊 Всего: ${links.length}`
+        `📊 Всего: ${links.length}`,
+        '',
+        ...details
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -790,12 +815,35 @@ bot.onText(/\/stats/, async (msg) => {
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
+bot.onText(/\/diag/, async (msg) => {
+    if (msg.chat.id !== ADMIN_ID) return;
+    const db = await readDB();
+    const links = await getLinks();
+    await bot.sendMessage(ADMIN_ID, [
+        '🧪 <b>Диагностика VOIDLINK X</b>',
+        '',
+        `PUBLIC_URL: <code>${escapeHtml(publicBaseUrl)}</code>`,
+        `PORT: <code>${escapeHtml(process.env.PORT || '3000')}</code>`,
+        `Цена: <code>${escapeHtml(price)} ₽</code>`,
+        '',
+        `👥 users: ${db.users.length}`,
+        `💰 payments: ${db.payments.length}`,
+        `⭐ reviews: ${db.reviews.length}`,
+        `📦 links: ${links.length}`,
+        '',
+        `Health: <code>${escapeHtml(publicBaseUrl)}/</code>`,
+        `Temp test path: <code>${escapeHtml(publicBaseUrl)}/a/test</code>`
+    ].join('\n'), { parse_mode: 'HTML', disable_web_page_preview: true });
+});
+
 bot.onText(/\/resettest/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     await resetDB();
     const links = await getLinks();
     links.forEach((link) => {
         link.status = 'free';
+        delete link.assignedTo;
+        delete link.assignedAt;
     });
     await saveLinks(links);
     await bot.sendMessage(ADMIN_ID, [
@@ -855,6 +903,7 @@ async function configureBotProfile() {
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
             { command: 'stats', description: '💰 Финансы' },
+            { command: 'diag', description: '🧪 Диагностика' },
             { command: 'resettest', description: '🧹 Очистить тестовую базу' }
         ], { scope: { type: 'chat', chat_id: ADMIN_ID } });
     } catch (error) {
@@ -885,14 +934,14 @@ app.listen(PORT, () => {
     console.log(`PUBLIC_URL для временных ссылок: ${publicBaseUrl}`);
 });
 
-app.get('/access/:token', async (req, res) => {
+async function handleTemporaryAccess(req, res) {
     try {
         const db = await readDB();
         const now = new Date();
         const user = db.users.find((item) => {
-            if (!item.active || item.permanent || !item.personalLink || !item.expiresAt) return false;
+            if (!item.active || item.permanent || !item.personalLink || !item.expiresAt || !item.accessToken) return false;
             if (new Date(item.expiresAt) <= now) return false;
-            return linkToken(item.personalLink, item.id) === req.params.token;
+            return item.accessToken === req.params.token;
         });
 
         if (!user) {
@@ -914,7 +963,10 @@ app.get('/access/:token', async (req, res) => {
         console.error('Ошибка access-шлюза:', error.message);
         return res.status(500).send('VOIDLINK X access gateway error');
     }
-});
+}
+
+app.get('/a/:token', handleTemporaryAccess);
+app.get('/access/:token', handleTemporaryAccess);
 
 app.get('/', (req, res) => {
     res.json({ ok: true, service: 'VOIDLINK X BOT' });
