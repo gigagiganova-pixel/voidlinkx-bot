@@ -4,7 +4,7 @@ const express = require('express');
 const path = require('path');
 
 const { getUser, saveUser, addPayment, readDB, expireSubscriptions } = require('./utils/db');
-const { getLinks, reserveFreeLink, releaseLink, removeLinkFromPool } = require('./utils/links');
+const { getLinks, reserveFreeLink, removeLinkFromPool } = require('./utils/links');
 const { encryptLink } = require('./utils/crypto');
 
 // --- НАСТРОЙКИ ---
@@ -40,7 +40,7 @@ bot.onText(/\/start/, async (msg) => {
     }
 });
 
-// --- ОБРАБОТКА КНОПОК (callback_query) ---
+// --- ОБРАБОТКА КНОПОК ---
 bot.on('callback_query', async (query) => {
     const chatId = query.message?.chat?.id;
     if (!chatId) return;
@@ -48,20 +48,109 @@ bot.on('callback_query', async (query) => {
     try {
         await bot.answerCallbackQuery(query.id);
 
+        // КНОПКА: КУПИТЬ ДОСТУП
         if (query.data === 'buy') {
             const payUrl = `https://yoomoney.ru/quickpay/confirm.xml?receiver=${process.env.YOOMONEY_WALLET}&quickpay-form=small&targets=VOIDLINK%20X&sum=${process.env.PRICE}&label=${chatId}&successURL=https://t.me/voidlinkx_bot`;
             
-            const text = `💳 *ОПЛАТА ПОДПИСКИ*\n\nСумма: *${process.env.PRICE} RUB*\n\nПосле оплаты доступ ВЫДАЕТСЯ АВТОМАТИЧЕСКИ в течение 1 минуты.`;
+            const text = `💳 *ОПЛАТА ПОДПИСКИ*\n\nСумма: *${process.env.PRICE} RUB*\n\n1️⃣ Оплатите по кнопке ниже\n2️⃣ После оплаты нажмите «Я ОПЛАТИЛ»\n3️⃣ Администратор проверит платеж и выдаст доступ`;
             
             await bot.sendMessage(chatId, text, {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🔗 ОПЛАТИТЬ', url: payUrl }]] }
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🔗 ПЕРЕЙТИ К ОПЛАТЕ', url: payUrl }],
+                        [{ text: '✅ Я ОПЛАТИЛ', callback_data: 'check_payment' }]
+                    ]
+                }
             });
         }
 
+        // КНОПКА: О ПРОЕКТЕ
         if (query.data === 'about') {
-            const text = `📡 *VOIDLINK X SPECIFICATION*\n\n• Полная изоляция трафика\n• Отсутствие логов\n• Вечный доступ после 3 оплат\n• 500 ₽/месяц`;
+            const text = `📡 *VOIDLINK X SPECIFICATION*\n\n• Полная изоляция трафика\n• Отсутствие логов\n• Вечный доступ после 3 оплат\n• ${process.env.PRICE} ₽/месяц`;
             await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        }
+
+        // ПОЛЬЗОВАТЕЛЬ НАЖАЛ "Я ОПЛАТИЛ"
+        if (query.data === 'check_payment') {
+            // Отправляем админу запрос на подтверждение
+            const keyboard = {
+                inline_keyboard: [
+                    [
+                        { text: '✅ ПОДТВЕРДИТЬ', callback_data: `confirm_${chatId}` },
+                        { text: '❌ ОТКЛОНИТЬ', callback_data: `reject_${chatId}` }
+                    ]
+                ]
+            };
+            
+            await bot.sendMessage(
+                ADMIN_ID, 
+                `💰 НОВАЯ ОПЛАТА!\n\nПользователь: ID ${chatId}\nСумма: ${process.env.PRICE} RUB\n\nПроверьте ЮMoney и подтвердите доступ.`, 
+                { reply_markup: keyboard }
+            );
+            
+            await bot.sendMessage(chatId, '✅ Запрос отправлен администратору. Доступ будет выдан после проверки платежа (обычно 5-10 минут).');
+        }
+
+        // АДМИН ПОДТВЕРДИЛ
+        if (query.data.startsWith('confirm_')) {
+            const userId = parseInt(query.data.split('_')[1]);
+            
+            let user = await getUser(userId);
+            let link;
+            let months = user ? user.monthsPaid + 1 : 1;
+            const isPermanent = months >= 3;
+
+            if (!user || !user.personalLink) {
+                link = await reserveFreeLink();
+                if (!link) {
+                    await bot.sendMessage(ADMIN_ID, `❌ Нет свободных ссылок для пользователя ${userId}! Добавьте ссылки через /addlink`);
+                    return;
+                }
+            } else {
+                link = user.personalLink;
+            }
+
+            if (isPermanent) {
+                await removeLinkFromPool(link);
+            }
+
+            const expires = new Date();
+            expires.setMonth(expires.getMonth() + 1);
+
+            user = {
+                id: userId,
+                username: user?.username || 'customer',
+                monthsPaid: months,
+                personalLink: link,
+                permanent: isPermanent,
+                expiresAt: expires.toISOString(),
+                active: true
+            };
+
+            await saveUser(user);
+            await addPayment({ user: userId, amount: process.env.PRICE, date: new Date().toISOString() });
+
+            const linkToSend = isPermanent ? link : encryptLink(link, userId);
+
+            let clientText = `✅ *ДОСТУП ПОДТВЕРЖДЕН!*\n\n`;
+            if (isPermanent) {
+                clientText += `🏆 Вы получили *ВЕЧНЫЙ ДОСТУП*!\n\n🌐 Ваша ссылка: ${linkToSend}\n\n🔒 Сохраните её в надежном месте.`;
+            } else {
+                clientText += `⏳ Доступ на 1 месяц активирован.\n\n🌐 Ваш шлюз: ${linkToSend}\n\n💎 Оплачено месяцев: *${months}/3*. Осталось: *${3 - months} мес.* до вечного доступа.`;
+            }
+
+            await bot.sendMessage(userId, clientText, { parse_mode: 'Markdown' });
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
+            await bot.sendMessage(ADMIN_ID, `✅ Доступ выдан пользователю ${userId} (${months}-й месяц)`);
+        }
+
+        // АДМИН ОТКЛОНИЛ
+        if (query.data.startsWith('reject_')) {
+            const userId = parseInt(query.data.split('_')[1]);
+            await bot.sendMessage(userId, '❌ Ваш платеж не подтвержден. Пожалуйста, проверьте правильность оплаты и попробуйте снова.');
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
+            await bot.sendMessage(ADMIN_ID, `❌ Отклонена заявка пользователя ${userId}`);
         }
 
     } catch (error) {
@@ -69,97 +158,7 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-// *** АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ОПЛАТЫ (РАБОЧИЙ ВЕБХУК ЮMONEY) ***
-app.post('/yoomoney-webhook', async (req, res) => {
-    console.log("📥 Вебхук получил запрос!");
-    
-    // 1. Сразу говорим ЮMoney, что всё приняли (иначе она будет дублировать уведомления)
-    res.status(200).send('OK');
-
-    try {
-        // 2. Логируем то, что пришло, для отладки
-        console.log("Тело запроса от ЮMoney:", req.body);
-
-        const { label, amount, codepro, notification_secret } = req.body;
-
-        // 3. Проверяем секрет (сверяем с тем, что в .env на Railway)
-        if (notification_secret !== process.env.YOOMONEY_SECRET) {
-            console.log("❌ Ошибка: неверный секрет вебхука!");
-            return;
-        }
-
-        // 4. Проверяем, что это обычный платеж (не защищенный кодом)
-        if (!label || codepro === 'true') {
-            console.log("ℹ️ Платеж с кодом протекции или без метки, игнорируем.");
-            return;
-        }
-
-        const userId = Number(label);
-        const paymentAmount = parseFloat(amount);
-        
-        // 5. Проверяем сумму (можно закомментировать, если не нужно)
-        if (paymentAmount < parseFloat(process.env.PRICE)) {
-            console.log(`⚠️ Сумма ${paymentAmount} меньше ${process.env.PRICE}`);
-            return;
-        }
-
-        console.log(`✅ Обрабатываю успешную оплату от ${userId} на сумму ${paymentAmount} руб.`);
-
-        // --- 6. ЛОГИКА ВЫДАЧИ ДОСТУПА (твой код) ---
-        let user = await getUser(userId);
-        let link;
-        let months = user ? user.monthsPaid + 1 : 1;
-        const isPermanent = months >= 3;
-
-        if (!user || !user.personalLink) {
-            link = await reserveFreeLink();
-            if (!link) {
-                await bot.sendMessage(ADMIN_ID, `❌ КРИТИЧНО: Закончились свободные ссылки для пользователя ${userId}!`);
-                return;
-            }
-        } else {
-            link = user.personalLink;
-        }
-
-        if (isPermanent) {
-            await removeLinkFromPool(link);
-        }
-
-        const expires = new Date();
-        expires.setMonth(expires.getMonth() + 1);
-
-        user = {
-            id: userId,
-            username: user?.username || 'customer',
-            monthsPaid: months,
-            personalLink: link,
-            permanent: isPermanent,
-            expiresAt: expires.toISOString(),
-            active: true
-        };
-
-        await saveUser(user);
-        await addPayment({ user: userId, amount: paymentAmount, date: new Date().toISOString() });
-
-        const linkToSend = isPermanent ? link : encryptLink(link, userId);
-
-        let clientText = `✅ *ОПЛАТА ПОЛУЧЕНА! ДОСТУП АКТИВИРОВАН!*\n\n`;
-        if (isPermanent) {
-            clientText += `🏆 ПОЗДРАВЛЯЮ! Вы получили *ВЕЧНЫЙ ДОСТУП*!\n\n🌐 Ваша ссылка: ${linkToSend}\n\n🔒 Сохраните её в надежном месте.`;
-        } else {
-            clientText += `⏳ Доступ на 1 месяц активирован.\n\n🌐 Ваш шлюз: ${linkToSend}\n\n💎 Оплачено месяцев: *${months}/3*. Осталось: *${3 - months} мес.* до вечного доступа.`;
-        }
-
-        await bot.sendMessage(userId, clientText, { parse_mode: 'Markdown' });
-        await bot.sendMessage(ADMIN_ID, `💰 *АВТО-ОПЛАТА*: Пользователь ${userId} оплатил ${paymentAmount} руб. Выдан ${months}-й месяц доступа.`);
-
-    } catch (err) {
-        console.error('🔥 КРИТИЧЕСКАЯ ОШИБКА В ВЕБХУКЕ:', err.message);
-        // Ничего не отправляем в res, так как ответ 'OK' уже ушел
-    }
-});
-
-// --- АДМИН-КОМАНДЫ (рабочие) ---
+// --- АДМИН-КОМАНДЫ ---
 bot.onText(/\/admin/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
     await bot.sendMessage(ADMIN_ID, `🛠 *VOIDLINK X ADMIN*\n\n/links — статус ссылок\n/users — список клиентов\n/stats — финансы\n/addlink <url> — добавить ссылку`);
@@ -200,10 +199,9 @@ bot.onText(/\/addlink (.+)/, async (msg, match) => {
     await bot.sendMessage(ADMIN_ID, `✅ Ссылка ${newUrl} добавлена в пул!`);
 });
 
-// --- ЗАПУСК СЕРВЕРА ---
+// --- ЗАПУСК СЕРВЕРА (только для Railway, вебхук не используется) ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ VOIDLINK X BOT запущен на порту ${PORT}`);
-    console.log(`🤖 Бот слушает команды...`);
-    console.log(`🌐 Вебхук будет доступен по адресу: /yoomoney-webhook`);
+    console.log(`🤖 Бот работает в режиме ручного подтверждения платежей`);
 });
