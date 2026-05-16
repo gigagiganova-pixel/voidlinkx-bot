@@ -7,7 +7,7 @@ async function initDB() {
     try {
         await fs.access(DB_FILE);
     } catch {
-        await fs.writeFile(DB_FILE, JSON.stringify({ users: [], payments: [] }, null, 2));
+        await fs.writeFile(DB_FILE, JSON.stringify({ users: [], payments: [], reviews: [] }, null, 2));
     }
 }
 
@@ -15,9 +15,13 @@ async function readDB() {
     await initDB();
     try {
         const data = await fs.readFile(DB_FILE, 'utf-8');
-        return JSON.parse(data);
+        const db = JSON.parse(data);
+        db.users = Array.isArray(db.users) ? db.users : [];
+        db.payments = Array.isArray(db.payments) ? db.payments : [];
+        db.reviews = Array.isArray(db.reviews) ? db.reviews : [];
+        return db;
     } catch {
-        return { users: [], payments: [] };
+        return { users: [], payments: [], reviews: [] };
     }
 }
 

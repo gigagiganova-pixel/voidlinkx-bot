@@ -27,6 +27,7 @@ const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, 
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 const publicBaseUrl = (process.env.PUBLIC_URL || process.env.ACCESS_BASE_URL || 'https://voidlink.app').replace(/\/+$/, '');
 let pollingConflictShown = false;
+const reviewDrafts = new Map();
 
 const MAIN_KEYBOARD = {
     inline_keyboard: [
@@ -144,7 +145,7 @@ function buildPaymentText() {
         '3. Нажмите «Я оплатил».',
         '4. Администратор проверит платёж и выдаст персональный доступ.',
         '',
-        '⏱ Обычно проверка занимает 5-10 минут.'
+        '⏱ Обычно проверка занимает 5-15 минут.'
     ].join('\n');
 }
 
@@ -162,13 +163,102 @@ function buildSupportText() {
 
 function buildReviewsText() {
     return [
-        '⭐ <b>Отзывы и впечатления</b>',
+        '⭐ <b>Отзывы VOIDLINK X</b>',
         '',
-        'Здесь будут собраны реальные отзывы пользователей VOIDLINK X: про запуск, качество связи, приватность и удобство личного доступа.',
+        'Здесь отображаются отзывы, которые прошли ручную модерацию.',
         '',
-        'Пока раздел готов к наполнению: добавьте баннер или скриншоты отзывов, и бот будет показывать их в этом блоке.',
+        'Клиенты с активным доступом могут оставить отзыв после 3 дней использования: выбрать оценку от 1 до 5 и написать короткий комментарий.',
         '',
-        '💎 Хотите протестировать систему лично? Оформите доступ на 1 месяц и получите персональную защищённую ссылку.'
+        'Все новые отзывы сначала приходят администратору на проверку.'
+    ].join('\n');
+}
+
+function stars(rating) {
+    return '⭐'.repeat(Number(rating));
+}
+
+function formatApprovedReview(review, index) {
+    const name = review.displayName || 'Клиент VOIDLINK X';
+    const date = review.approvedAt || review.createdAt;
+    return [
+        `${index + 1}. ${stars(review.rating)} <b>${escapeHtml(name)}</b>`,
+        `<i>${new Date(date).toLocaleDateString('ru-RU')}</i>`,
+        escapeHtml(review.text)
+    ].join('\n');
+}
+
+function buildPublicReviewsText(reviews = []) {
+    const approved = reviews
+        .filter((review) => review.status === 'approved')
+        .sort((a, b) => new Date(b.approvedAt || b.createdAt) - new Date(a.approvedAt || a.createdAt))
+        .slice(0, 10);
+
+    if (!approved.length) {
+        return [
+            buildReviewsText(),
+            '',
+            'Пока опубликованных отзывов нет. Первый честный отзыв появится здесь после модерации.'
+        ].join('\n');
+    }
+
+    return [
+        '⭐ <b>Отзывы VOIDLINK X</b>',
+        '',
+        ...approved.map(formatApprovedReview).flatMap((text) => [text, '']),
+        '💎 Хотите проверить лично? Оформите доступ и получите персональную защищённую ссылку.'
+    ].join('\n').trim();
+}
+
+function reviewEligibility(user) {
+    if (!user || !user.active || !user.firstPaidAt) {
+        return { ok: false, reason: 'Оставить отзыв могут клиенты с активным доступом VOIDLINK X.' };
+    }
+
+    const usedMs = Date.now() - new Date(user.firstPaidAt).getTime();
+    const minMs = 3 * 24 * 60 * 60 * 1000;
+
+    if (usedMs < minMs) {
+        const availableAt = new Date(new Date(user.firstPaidAt).getTime() + minMs);
+        return {
+            ok: false,
+            reason: `Отзыв можно оставить после 3 дней использования. Доступно с ${availableAt.toLocaleDateString('ru-RU')}.`
+        };
+    }
+
+    return { ok: true };
+}
+
+function buildReviewStartText(user) {
+    const eligibility = reviewEligibility(user);
+
+    if (!eligibility.ok) {
+        return [
+            '⭐ <b>Отзывы VOIDLINK X</b>',
+            '',
+            eligibility.reason,
+            '',
+            'Если есть вопрос по доступу или оплате, напишите в поддержку.'
+        ].join('\n');
+    }
+
+    return [
+        '⭐ <b>Оставить отзыв</b>',
+        '',
+        'Спасибо, что пользуетесь VOIDLINK X.',
+        '',
+        'Выберите оценку от 1 до 5. После этого бот попросит написать комментарий, а отзыв уйдёт администратору на модерацию.'
+    ].join('\n');
+}
+
+function buildReviewModerationText(review) {
+    return [
+        '⭐ <b>Новый отзыв на модерацию</b>',
+        '',
+        `Оценка: ${stars(review.rating)} (${review.rating}/5)`,
+        `Пользователь: <a href="${profileUrl(review.profile)}">${escapeHtml(review.displayName)}</a>`,
+        `Telegram ID: <code>${review.userId}</code>`,
+        '',
+        `<b>Комментарий:</b>\n${escapeHtml(review.text)}`
     ].join('\n');
 }
 
@@ -243,6 +333,31 @@ async function sendPhotoMessage(chatId, photoPath, text, replyMarkup) {
 
 async function sendPaymentMessage(chatId, text, replyMarkup) {
     await sendPhotoMessage(chatId, photoPayment, text, replyMarkup);
+}
+
+async function addReview(review) {
+    const db = await readDB();
+    db.reviews.push(review);
+    await writeDB(db);
+}
+
+async function updateReviewStatus(reviewId, status) {
+    const db = await readDB();
+    const review = db.reviews.find((item) => item.id === reviewId);
+
+    if (!review) {
+        return null;
+    }
+
+    review.status = status;
+    review.reviewedAt = new Date().toISOString();
+
+    if (status === 'approved') {
+        review.approvedAt = review.reviewedAt;
+    }
+
+    await writeDB(db);
+    return review;
 }
 
 async function sendExpiryReminders() {
@@ -326,12 +441,89 @@ bot.on('callback_query', async (query) => {
 
         // КНОПКА: ОТЗЫВЫ
         if (query.data === 'reviews') {
-            await sendPhotoMessage(chatId, photoReviews, buildReviewsText(), {
+            const db = await readDB();
+            await sendPhotoMessage(chatId, photoReviews, buildPublicReviewsText(db.reviews), {
                 inline_keyboard: [
+                    [{ text: '⭐ Оставить отзыв', callback_data: 'leave_review' }],
                     [{ text: '💎 Купить доступ', callback_data: 'buy' }],
                     [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
                 ]
             });
+        }
+
+        // КНОПКА: ОСТАВИТЬ ОТЗЫВ
+        if (query.data === 'leave_review') {
+            const user = await getUser(profile.id);
+            const eligibility = reviewEligibility(user);
+            const keyboard = eligibility.ok
+                ? {
+                    inline_keyboard: [[1, 2, 3, 4, 5].map((rating) => ({
+                        text: `${rating}⭐`,
+                        callback_data: `review_rate_${rating}`
+                    }))]
+                }
+                : {
+                    inline_keyboard: [
+                        [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+                    ]
+                };
+
+            await bot.sendMessage(chatId, buildReviewStartText(user), { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+
+        // КНОПКА: ОЦЕНКА ОТЗЫВА
+        if (query.data.startsWith('review_rate_')) {
+            const user = await getUser(profile.id);
+            const eligibility = reviewEligibility(user);
+
+            if (!eligibility.ok) {
+                await bot.sendMessage(chatId, buildReviewStartText(user), { parse_mode: 'HTML' });
+                return;
+            }
+
+            const rating = Number(query.data.split('_')[2]);
+            reviewDrafts.set(profile.id, { rating, createdAt: new Date().toISOString() });
+
+            await bot.sendMessage(
+                chatId,
+                [
+                    `${stars(rating)} <b>Оценка принята</b>`,
+                    '',
+                    'Теперь напишите комментарий одним сообщением. Лучше коротко: что понравилось, как прошёл запуск, качество связи и общее впечатление.'
+                ].join('\n'),
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        // АДМИН: ПОДТВЕРДИТЬ ОТЗЫВ
+        if (query.data.startsWith('review_approve_')) {
+            if (query.from.id !== ADMIN_ID) return;
+            const reviewId = query.data.replace('review_approve_', '');
+            const review = await updateReviewStatus(reviewId, 'approved');
+
+            if (!review) {
+                await bot.sendMessage(ADMIN_ID, '⚠️ Отзыв не найден.');
+                return;
+            }
+
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
+            await bot.sendMessage(ADMIN_ID, `✅ Отзыв опубликован: ${stars(review.rating)} от ${review.displayName}`);
+            await bot.sendMessage(review.userId, '✅ Спасибо! Ваш отзыв прошёл модерацию и опубликован в блоке отзывов.');
+        }
+
+        // АДМИН: ОТКЛОНИТЬ ОТЗЫВ
+        if (query.data.startsWith('review_reject_')) {
+            if (query.from.id !== ADMIN_ID) return;
+            const reviewId = query.data.replace('review_reject_', '');
+            const review = await updateReviewStatus(reviewId, 'rejected');
+
+            if (!review) {
+                await bot.sendMessage(ADMIN_ID, '⚠️ Отзыв не найден.');
+                return;
+            }
+
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
+            await bot.sendMessage(ADMIN_ID, `❌ Отзыв отклонён: ${stars(review.rating)} от ${review.displayName}`);
         }
 
         // КНОПКА: ПОДДЕРЖКА
@@ -374,7 +566,7 @@ bot.on('callback_query', async (query) => {
                 { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true }
             );
             
-            await bot.sendMessage(profile.id, '✅ Заявка отправлена администратору. Доступ будет выдан после ручной проверки платежа, обычно в течение 5-10 минут.');
+            await bot.sendMessage(profile.id, '✅ Заявка отправлена администратору. Доступ будет выдан после ручной проверки платежа, обычно в течение 5-15 минут.');
         }
 
         // АДМИН ПОДТВЕРДИЛ
@@ -417,6 +609,7 @@ bot.on('callback_query', async (query) => {
                 active: true,
                 remindersSent: {},
                 createdAt: user?.createdAt || new Date().toISOString(),
+                firstPaidAt: user?.firstPaidAt || new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
 
@@ -444,6 +637,76 @@ bot.on('callback_query', async (query) => {
     }
 });
 
+bot.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+
+    const profile = profileFromTelegram(msg.from);
+    const draft = reviewDrafts.get(profile.id);
+    if (!draft) return;
+
+    const text = msg.text.trim();
+
+    if (text.length < 10) {
+        await bot.sendMessage(msg.chat.id, '⭐ Напишите чуть подробнее: минимум 10 символов. Например, что понравилось в связи, запуске или приватности.');
+        return;
+    }
+
+    if (text.length > 900) {
+        await bot.sendMessage(msg.chat.id, '⭐ Отзыв получился слишком длинным. Пожалуйста, уложитесь до 900 символов.');
+        return;
+    }
+
+    const user = await getUser(profile.id);
+    const eligibility = reviewEligibility(user);
+    if (!eligibility.ok) {
+        reviewDrafts.delete(profile.id);
+        await bot.sendMessage(msg.chat.id, buildReviewStartText(user), { parse_mode: 'HTML' });
+        return;
+    }
+
+    const review = {
+        id: `${Date.now()}_${profile.id}`,
+        userId: profile.id,
+        profile,
+        displayName: fullName(profile),
+        rating: draft.rating,
+        text,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+    };
+
+    await addReview(review);
+    reviewDrafts.delete(profile.id);
+
+    await bot.sendMessage(
+        msg.chat.id,
+        [
+            '✅ <b>Отзыв отправлен на модерацию</b>',
+            '',
+            'Спасибо за обратную связь. После проверки администратор сможет опубликовать его в блоке отзывов.'
+        ].join('\n'),
+        { parse_mode: 'HTML' }
+    );
+
+    await bot.sendMessage(
+        ADMIN_ID,
+        buildReviewModerationText(review),
+        {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: '✅ Опубликовать', callback_data: `review_approve_${review.id}` },
+                        { text: '❌ Отклонить', callback_data: `review_reject_${review.id}` }
+                    ],
+                    [{ text: '💬 Написать пользователю', url: profileUrl(profile) }]
+                ]
+            }
+        }
+    );
+});
+
 // --- АДМИН-КОМАНДЫ ---
 bot.onText(/\/admin/, async (msg) => {
     if (msg.chat.id !== ADMIN_ID) return;
@@ -468,8 +731,10 @@ bot.onText(/\/support/, async (msg) => {
 });
 
 bot.onText(/\/reviews/, async (msg) => {
-    await sendPhotoMessage(msg.chat.id, photoReviews, buildReviewsText(), {
+    const db = await readDB();
+    await sendPhotoMessage(msg.chat.id, photoReviews, buildPublicReviewsText(db.reviews), {
         inline_keyboard: [
+            [{ text: '⭐ Оставить отзыв', callback_data: 'leave_review' }],
             [{ text: '💎 Купить доступ', callback_data: 'buy' }],
             [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
         ]
