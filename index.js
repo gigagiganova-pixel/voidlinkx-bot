@@ -1,4 +1,10 @@
-require('dotenv').config();
+const dotenvResult = require('dotenv').config();
+const fileEnv = dotenvResult.parsed || {};
+['BOT_TOKEN', 'ADMIN_ID', 'PRICE', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
+    if (!process.env[key] && fileEnv[key]) {
+        process.env[key] = fileEnv[key];
+    }
+});
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const path = require('path');
