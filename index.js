@@ -1,6 +1,6 @@
 const dotenvResult = require('dotenv').config();
 const fileEnv = dotenvResult.parsed || {};
-['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
+['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'REGULAR_PRICE', 'DISCOUNT_UNTIL_TEXT', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
     if (!process.env[key] && fileEnv[key]) {
         process.env[key] = fileEnv[key];
     }
@@ -33,6 +33,8 @@ const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
 const photoReferral = path.resolve(__dirname, 'assets/referral.jpg');
 
 const price = process.env.PRICE || '500';
+const regularPrice = process.env.REGULAR_PRICE || '500';
+const discountUntilText = process.env.DISCOUNT_UNTIL_TEXT || 'примерно через неделю';
 const referralPercent = 10;
 const referralCommission = Math.round(Number(price) * referralPercent / 100);
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
@@ -40,6 +42,7 @@ const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(
 let pollingConflictShown = false;
 const reviewDrafts = new Map();
 const referralDrafts = new Map();
+const broadcastDrafts = new Set();
 const photoFileIdCache = new Map();
 
 const MAIN_KEYBOARD = {
@@ -109,6 +112,18 @@ async function sendToAdmins(text, options = {}) {
     return results;
 }
 
+function activityStats(users = []) {
+    const now = Date.now();
+    const activeWindowMs = 5 * 60 * 1000;
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    return {
+        total: users.length,
+        activeNow: users.filter((user) => user.lastSeenAt && now - new Date(user.lastSeenAt).getTime() <= activeWindowMs).length,
+        activeToday: users.filter((user) => user.lastSeenAt && now - new Date(user.lastSeenAt).getTime() <= dayMs).length
+    };
+}
+
 function profileFromTelegram(from = {}) {
     return {
         id: Number(from.id),
@@ -153,6 +168,18 @@ function adminProfileText(profile = {}) {
     ].join('\n');
 }
 
+function buildPriceLine() {
+    if (String(price) === String(regularPrice)) {
+        return `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽`;
+    }
+
+    const discount = Math.max(0, Number(regularPrice) - Number(price));
+    return [
+        `💎 <b>Стоимость сейчас:</b> ${escapeHtml(price)} ₽`,
+        `🔥 Временная скидка: -${discount || 50} ₽. ${escapeHtml(discountUntilText)} цена вернётся к ${escapeHtml(regularPrice)} ₽.`
+    ].join('\n');
+}
+
 function normalizeUserLinks(user = {}) {
     if (!user) {
         return [];
@@ -194,6 +221,8 @@ async function upsertUserProfile(profile, options = {}) {
         referral: existing?.referral || null,
         active: Boolean(existing?.active),
         createdAt: existing?.createdAt || now,
+        lastSeenAt: now,
+        lastAction: options.action || existing?.lastAction || 'activity',
         updatedAt: now
     };
 
@@ -213,7 +242,7 @@ function buildStartText() {
         '⚡ полноценный личный канал связи после одной оплаты',
         '🏆 оригинальная рабочая ссылка закрепляется за вами',
         '',
-        `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽`
+        buildPriceLine()
     ].join('\n');
 }
 
@@ -224,7 +253,7 @@ function buildAboutText() {
         'VOIDLINK X работает через WebRTC: соединение создаётся напрямую между участниками, а ссылка выдаётся персонально после ручной проверки оплаты.',
         '',
         '<b>Как устроен доступ:</b>',
-        `💎 Оплата ${escapeHtml(price)} ₽ — личный канал связи из ограниченного пула.`,
+        `${buildPriceLine().replace(/<[^>]+>/g, '')} — личный канал связи из ограниченного пула.`,
         '🔗 После подтверждения вы получаете оригинальную рабочую ссылку.',
         '🛡 Ссылка удаляется из общего пула и закрепляется за вами.',
         '',
@@ -237,7 +266,7 @@ function buildPaymentText() {
         '💳 <b>Оплата доступа VOIDLINK X</b>',
         '<b>Твой личный канал связи активируется вручную</b>',
         '',
-        `💎 <b>Сумма:</b> ${escapeHtml(price)} ₽`,
+        buildPriceLine(),
         '',
         '1. Нажмите кнопку оплаты.',
         '2. После перевода вернитесь в бот.',
@@ -380,6 +409,10 @@ function referralLink(userId) {
 }
 
 function normalizeReferral(referral = {}) {
+    if (!referral) {
+        referral = {};
+    }
+
     return {
         active: Boolean(referral.active),
         details: referral.details || '',
@@ -396,7 +429,7 @@ function buildReferralIntroText() {
         '',
         `Приглашайте людей по личной ссылке и получайте <b>${referralPercent}%</b> с каждой подтверждённой покупки.`,
         '',
-        `💎 Цена доступа: ${escapeHtml(price)} ₽`,
+        buildPriceLine(),
         `💰 Начисление за одну покупку: ${referralCommission} ₽`,
         '',
         '<b>Как это работает:</b>',
@@ -742,6 +775,24 @@ async function updateWithdrawal(withdrawalId, status, adminId) {
     return { withdrawal, user };
 }
 
+async function broadcastToUsers(text) {
+    const db = await readDB();
+    const recipients = db.users
+        .map((user) => Number(user.id))
+        .filter((id) => id && !isAdmin(id));
+
+    const uniqueRecipients = [...new Set(recipients)];
+    const results = await Promise.allSettled(
+        uniqueRecipients.map((id) => bot.sendMessage(id, text, { parse_mode: 'HTML', disable_web_page_preview: true }))
+    );
+
+    return {
+        total: uniqueRecipients.length,
+        sent: results.filter((item) => item.status === 'fulfilled').length,
+        failed: results.filter((item) => item.status === 'rejected').length
+    };
+}
+
 // --- КОМАНДА /start ---
 bot.onText(/^\/start(?:\s|$)/, async (msg) => {
     const chatId = msg.chat.id;
@@ -750,7 +801,7 @@ bot.onText(/^\/start(?:\s|$)/, async (msg) => {
         const startArg = msg.text?.split(/\s+/)[1] || '';
         const refMatch = startArg.match(/^ref_(\d+)$/);
         const referredBy = refMatch ? Number(refMatch[1]) : null;
-        await upsertUserProfile(profileFromTelegram(msg.from), { referredBy });
+        await upsertUserProfile(profileFromTelegram(msg.from), { referredBy, action: 'start' });
         await sendStartMessage(chatId);
     } catch (error) {
         console.error('Ошибка в /start:', error.message);
@@ -768,6 +819,24 @@ bot.on('callback_query', async (query) => {
             console.error('Не удалось ответить на callback:', error.message);
         });
         const profile = profileFromTelegram(query.from);
+        await upsertUserProfile(profile, { action: `button:${query.data}` });
+
+        if (query.data === 'admin_broadcast') {
+            if (!isAdmin(query.from.id)) return;
+            broadcastDrafts.add(query.from.id);
+            await bot.sendMessage(
+                chatId,
+                [
+                    '📣 <b>Рассылка</b>',
+                    '',
+                    'Отправьте следующим сообщением текст, который нужно разослать всем пользователям бота.',
+                    '',
+                    'HTML-разметка поддерживается. Для отмены отправьте /cancel.'
+                ].join('\n'),
+                { parse_mode: 'HTML' }
+            );
+            return;
+        }
 
         // КНОПКА: КУПИТЬ ДОСТУП
         if (query.data === 'buy') {
@@ -1147,9 +1216,28 @@ bot.on('callback_query', async (query) => {
 });
 
 bot.on('message', async (msg) => {
+    const profile = profileFromTelegram(msg.from);
+    await upsertUserProfile(profile, { action: msg.text?.startsWith('/') ? msg.text.split(/\s+/)[0] : 'message' });
+
     if (!msg.text || msg.text.startsWith('/')) return;
 
-    const profile = profileFromTelegram(msg.from);
+    if (isAdmin(profile.id) && broadcastDrafts.has(profile.id)) {
+        const text = msg.text.trim();
+
+        if (text.length < 2) {
+            await bot.sendMessage(msg.chat.id, '📣 Сообщение слишком короткое. Отправьте текст рассылки или /cancel.');
+            return;
+        }
+
+        broadcastDrafts.delete(profile.id);
+        const result = await broadcastToUsers(text);
+        await bot.sendMessage(
+            msg.chat.id,
+            `✅ Рассылка завершена.\n\nПолучателей: ${result.total}\nОтправлено: ${result.sent}\nОшибок: ${result.failed}`
+        );
+        return;
+    }
+
     const referralDraft = referralDrafts.get(profile.id);
     if (referralDraft) {
         const details = msg.text.trim();
@@ -1262,10 +1350,18 @@ bot.onText(/\/admin/, async (msg) => {
         '👥 /users — клиенты и Telegram ID',
         '💰 /stats — финансы',
         '🤝 /affiliates — партнёры и выплаты',
+        '📣 /broadcast — рассылка',
         '💬 /support — контакт поддержки',
         '⭐ /reviews — блок отзывов',
         '➕ /addlink &lt;url&gt; — добавить ссылку'
-    ].join('\n'), { parse_mode: 'HTML' });
+    ].join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '📣 Сделать рассылку', callback_data: 'admin_broadcast' }]
+            ]
+        }
+    });
 });
 
 bot.onText(/\/support/, async (msg) => {
@@ -1284,6 +1380,32 @@ bot.onText(/\/reviews/, async (msg) => {
         photoReviews,
         buildPublicReviewsText(db.reviews),
         actionKeyboard({ leaveReview: true, referral: true })
+    );
+});
+
+bot.onText(/\/cancel/, async (msg) => {
+    if (!isAdmin(msg.chat.id)) return;
+    broadcastDrafts.delete(msg.chat.id);
+    await bot.sendMessage(msg.chat.id, '✅ Действие отменено.');
+});
+
+bot.onText(/\/broadcast(?:\s+([\s\S]+))?/, async (msg, match) => {
+    if (!isAdmin(msg.chat.id)) return;
+    const text = match?.[1]?.trim();
+
+    if (!text) {
+        broadcastDrafts.add(msg.chat.id);
+        await bot.sendMessage(
+            msg.chat.id,
+            '📣 Отправьте следующим сообщением текст рассылки. Для отмены: /cancel.'
+        );
+        return;
+    }
+
+    const result = await broadcastToUsers(text);
+    await bot.sendMessage(
+        msg.chat.id,
+        `✅ Рассылка завершена.\n\nПолучателей: ${result.total}\nОтправлено: ${result.sent}\nОшибок: ${result.failed}`
     );
 });
 
@@ -1400,13 +1522,19 @@ bot.onText(/\/stats/, async (msg) => {
     const pendingWithdrawals = db.withdrawals
         .filter((item) => item.status === 'pending')
         .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const activity = activityStats(db.users);
     await bot.sendMessage(msg.chat.id, [
         '💰 <b>Финансы</b>',
         '',
         `💎 Всего заработано: ${total} ₽`,
         `🧾 Транзакций: ${db.payments.length}`,
         `🤝 Реферальных начислений: ${referralTotal} ₽`,
-        `💸 Ожидают выплаты: ${pendingWithdrawals} ₽`
+        `💸 Ожидают выплаты: ${pendingWithdrawals} ₽`,
+        '',
+        '📊 <b>Активность бота</b>',
+        `👥 Всего открывали/нажимали: ${activity.total}`,
+        `🟢 Активны за 5 минут: ${activity.activeNow}`,
+        `🕘 Активны за 24 часа: ${activity.activeToday}`
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -1459,7 +1587,8 @@ async function configureBotProfile() {
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
             { command: 'stats', description: '💰 Финансы' },
-            { command: 'affiliates', description: '🤝 Партнёры' }
+            { command: 'affiliates', description: '🤝 Партнёры' },
+            { command: 'broadcast', description: '📣 Рассылка' }
         ];
 
         for (const adminId of adminIds) {
