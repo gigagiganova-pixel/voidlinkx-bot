@@ -1,6 +1,6 @@
 const dotenvResult = require('dotenv').config();
 const fileEnv = dotenvResult.parsed || {};
-['BOT_TOKEN', 'ADMIN_ID', 'PRICE', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
+['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
     if (!process.env[key] && fileEnv[key]) {
         process.env[key] = fileEnv[key];
     }
@@ -15,7 +15,11 @@ const { getLinks, saveLinks, reserveFreeLink } = require('./utils/links');
 
 // --- НАСТРОЙКИ ---
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
-const ADMIN_ID = Number(process.env.ADMIN_ID);
+const adminIds = (process.env.ADMIN_IDS || process.env.ADMIN_ID || '')
+    .split(',')
+    .map((id) => Number(id.trim()))
+    .filter(Boolean);
+const ADMIN_ID = adminIds[0];
 const app = express();
 
 app.use(express.urlencoded({ extended: true }));
@@ -26,12 +30,16 @@ const photoAbout = path.resolve(__dirname, 'assets/about.jpg');
 const photoPayment = path.resolve(__dirname, 'assets/payment.jpg');
 const photoSupport = path.resolve(__dirname, 'assets/support.jpg');
 const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
+const photoReferral = path.resolve(__dirname, 'assets/referral.jpg');
 
 const price = process.env.PRICE || '500';
+const referralPercent = 10;
+const referralCommission = Math.round(Number(price) * referralPercent / 100);
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 let pollingConflictShown = false;
 const reviewDrafts = new Map();
+const referralDrafts = new Map();
 const photoFileIdCache = new Map();
 
 const MAIN_KEYBOARD = {
@@ -41,6 +49,7 @@ const MAIN_KEYBOARD = {
             { text: '🛡 О проекте', callback_data: 'about' },
             { text: '⭐ Отзывы', callback_data: 'reviews' }
         ],
+        [{ text: '🤝 Реферальная программа', callback_data: 'referral' }],
         [{ text: '💬 Поддержка', callback_data: 'support' }]
     ]
 };
@@ -51,6 +60,7 @@ function actionKeyboard(options = {}) {
         support = true,
         reviews = false,
         leaveReview = false,
+        referral = false,
         supportText = '💬 Поддержка'
     } = options;
 
@@ -68,6 +78,10 @@ function actionKeyboard(options = {}) {
         rows.push([{ text: '💎 Купить доступ', callback_data: 'buy' }]);
     }
 
+    if (referral) {
+        rows.push([{ text: '🤝 Реферальная программа', callback_data: 'referral' }]);
+    }
+
     if (support) {
         rows.push([{ text: supportText, url: `https://t.me/${supportUsername}` }]);
     }
@@ -81,6 +95,18 @@ function escapeHtml(value = '') {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+function isAdmin(id) {
+    return adminIds.includes(Number(id));
+}
+
+async function sendToAdmins(text, options = {}) {
+    const results = await Promise.allSettled(
+        adminIds.map((adminId) => bot.sendMessage(adminId, text, options))
+    );
+
+    return results;
 }
 
 function profileFromTelegram(from = {}) {
@@ -146,11 +172,14 @@ function normalizeUserLinks(user = {}) {
     return [];
 }
 
-async function upsertUserProfile(profile) {
+async function upsertUserProfile(profile, options = {}) {
     if (!profile.id) return null;
 
     const existing = await getUser(profile.id);
     const now = new Date().toISOString();
+    const referredBy = options.referredBy && Number(options.referredBy) !== profile.id
+        ? Number(options.referredBy)
+        : existing?.referredBy || null;
     const user = {
         id: profile.id,
         telegramId: profile.id,
@@ -161,6 +190,8 @@ async function upsertUserProfile(profile) {
         purchases: existing?.purchases || existing?.monthsPaid || normalizeUserLinks(existing).length,
         links: normalizeUserLinks(existing),
         personalLink: existing?.personalLink || null,
+        referredBy,
+        referral: existing?.referral || null,
         active: Boolean(existing?.active),
         createdAt: existing?.createdAt || now,
         updatedAt: now
@@ -344,6 +375,107 @@ function buildReviewModerationText(review) {
     ].join('\n');
 }
 
+function referralLink(userId) {
+    return `https://t.me/${botUsername}?start=ref_${userId}`;
+}
+
+function normalizeReferral(referral = {}) {
+    return {
+        active: Boolean(referral.active),
+        details: referral.details || '',
+        balance: Number(referral.balance || 0),
+        totalEarned: Number(referral.totalEarned || 0),
+        totalPaidOut: Number(referral.totalPaidOut || 0),
+        joinedAt: referral.joinedAt || null
+    };
+}
+
+function buildReferralIntroText() {
+    return [
+        '🤝 <b>Реферальная программа VOIDLINK X</b>',
+        '',
+        `Приглашайте людей по личной ссылке и получайте <b>${referralPercent}%</b> с каждой подтверждённой покупки.`,
+        '',
+        `💎 Цена доступа: ${escapeHtml(price)} ₽`,
+        `💰 Начисление за одну покупку: ${referralCommission} ₽`,
+        '',
+        '<b>Как это работает:</b>',
+        '1. Вы регистрируете реквизиты для выплат.',
+        '2. Бот выдаёт вашу личную реферальную ссылку.',
+        '3. Друг переходит по ней и покупает доступ.',
+        '4. После подтверждения оплаты комиссия сразу попадает на ваш баланс.',
+        '5. Вы запрашиваете вывод, а админ вручную переводит деньги и подтверждает выплату.',
+        '',
+        'Для подключения понадобится одним сообщением отправить ФИО, телефон и банк.'
+    ].join('\n');
+}
+
+function buildReferralDetailsPrompt() {
+    return [
+        '📝 <b>Регистрация партнёра</b>',
+        '',
+        'Отправьте реквизиты одним сообщением в таком формате:',
+        '',
+        '<code>Иванов Иван',
+        '+7 900 000-00-00',
+        'Сбербанк</code>',
+        '',
+        'Эти данные увидит только админ при запросе выплаты.'
+    ].join('\n');
+}
+
+function buildReferralCabinetText(user) {
+    const referral = normalizeReferral(user?.referral);
+    const invitedCount = Number(user?.referralInvitedCount || 0);
+
+    return [
+        '🤝 <b>Партнёрский кабинет VOIDLINK X</b>',
+        '',
+        `💰 <b>Баланс к выводу:</b> ${referral.balance} ₽`,
+        `📈 <b>Всего начислено:</b> ${referral.totalEarned} ₽`,
+        `✅ <b>Выплачено:</b> ${referral.totalPaidOut} ₽`,
+        `👥 <b>Покупок по ссылке:</b> ${invitedCount}`,
+        '',
+        '<b>Ваша ссылка:</b>',
+        referralLink(user.id),
+        '',
+        `Комиссия: ${referralPercent}% с подтверждённой покупки (${referralCommission} ₽ сейчас).`
+    ].join('\n');
+}
+
+function buildWithdrawalAdminText(withdrawal, user) {
+    const referral = normalizeReferral(user?.referral);
+    return [
+        '💸 <b>Новый запрос на вывод</b>',
+        '',
+        adminProfileText(user),
+        '',
+        `💰 <b>Сумма:</b> ${withdrawal.amount} ₽`,
+        '',
+        '<b>Реквизиты:</b>',
+        escapeHtml(referral.details || 'не указаны')
+    ].join('\n');
+}
+
+function buildPaymentRequestAdminText(request, profile) {
+    const refLine = request.referredBy
+        ? `🤝 <b>Реферал от:</b> <code>${request.referredBy}</code>`
+        : '🤝 <b>Реферал:</b> нет';
+
+    return [
+        '💰 <b>Новая заявка на оплату</b>',
+        '',
+        adminProfileText(profile),
+        '',
+        `💎 <b>Сумма:</b> ${escapeHtml(price)} ₽`,
+        `🏷 <b>Метка ЮMoney:</b> <code>${profile.id}</code>`,
+        refLine,
+        `🧾 <b>ID заявки:</b> <code>${request.id}</code>`,
+        '',
+        '🧾 Проверьте ЮMoney и подтвердите доступ.'
+    ].join('\n');
+}
+
 function buildClientAccessText({ linkToSend, months, isPermanent }) {
     return [
         '🏆 <b>Доступ подтверждён</b>',
@@ -407,8 +539,7 @@ async function notifyAdminError(context, error) {
     if (!ADMIN_ID) return;
 
     try {
-        await bot.sendMessage(
-            ADMIN_ID,
+        await sendToAdmins(
             [
                 '⚠️ <b>Ошибка бота</b>',
                 '',
@@ -432,7 +563,7 @@ async function updateReviewStatus(reviewId, status) {
     const db = await readDB();
     const review = db.reviews.find((item) => item.id === reviewId);
 
-    if (!review) {
+    if (!review || review.status !== 'pending') {
         return null;
     }
 
@@ -447,12 +578,179 @@ async function updateReviewStatus(reviewId, status) {
     return review;
 }
 
+async function createPaymentRequest(profile) {
+    const db = await readDB();
+    const user = db.users.find((item) => item.id === Number(profile.id));
+    const request = {
+        id: `${Date.now()}_${profile.id}`,
+        userId: Number(profile.id),
+        profile,
+        amount: Number(price),
+        referredBy: user?.referredBy || null,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+    };
+
+    db.paymentRequests.push(request);
+    await writeDB(db);
+    return request;
+}
+
+async function getPendingPaymentRequest(requestId) {
+    const db = await readDB();
+    return db.paymentRequests.find((item) => item.id === requestId && item.status === 'pending') || null;
+}
+
+async function updatePaymentRequest(requestId, status, adminId) {
+    const db = await readDB();
+    const request = db.paymentRequests.find((item) => item.id === requestId);
+
+    if (!request || request.status !== 'pending') {
+        return null;
+    }
+
+    request.status = status;
+    request.adminId = Number(adminId);
+    request.reviewedAt = new Date().toISOString();
+    await writeDB(db);
+    return request;
+}
+
+async function registerReferralPartner(userId, details) {
+    const user = await getUser(userId);
+    const now = new Date().toISOString();
+    const referral = normalizeReferral(user?.referral);
+    const baseUser = user || { id: Number(userId), telegramId: Number(userId), createdAt: now };
+
+    const updatedUser = {
+        ...baseUser,
+        id: Number(userId),
+        telegramId: Number(userId),
+        referral: {
+            ...referral,
+            active: true,
+            details,
+            joinedAt: referral.joinedAt || now
+        },
+        updatedAt: now
+    };
+
+    await saveUser(updatedUser);
+    return updatedUser;
+}
+
+async function creditReferral(buyer) {
+    const referrerId = Number(buyer?.referredBy);
+    if (!referrerId || referrerId === Number(buyer?.id)) {
+        return null;
+    }
+
+    const referrer = await getUser(referrerId);
+    if (!referrer?.referral?.active) {
+        return null;
+    }
+
+    const db = await readDB();
+    const referral = normalizeReferral(referrer.referral);
+    const commission = referralCommission;
+
+    referral.balance += commission;
+    referral.totalEarned += commission;
+
+    referrer.referral = referral;
+    referrer.referralInvitedCount = Number(referrer.referralInvitedCount || 0) + 1;
+    referrer.updatedAt = new Date().toISOString();
+
+    const userIndex = db.users.findIndex((item) => item.id === Number(referrer.id));
+    if (userIndex >= 0) {
+        db.users[userIndex] = referrer;
+    }
+
+    db.referralEarnings.push({
+        id: `${Date.now()}_${buyer.id}_${referrerId}`,
+        referrerId,
+        buyerId: Number(buyer.id),
+        amount: commission,
+        percent: referralPercent,
+        purchaseAmount: Number(price),
+        createdAt: new Date().toISOString()
+    });
+
+    await writeDB(db);
+    return { referrer, amount: commission };
+}
+
+async function createWithdrawal(userId) {
+    const db = await readDB();
+    const user = db.users.find((item) => item.id === Number(userId));
+    const referral = normalizeReferral(user?.referral);
+
+    if (!user || !referral.active || referral.balance <= 0) {
+        return null;
+    }
+
+    const amount = referral.balance;
+    referral.balance = 0;
+    user.referral = referral;
+    user.updatedAt = new Date().toISOString();
+
+    const withdrawal = {
+        id: `${Date.now()}_${userId}`,
+        userId: Number(userId),
+        amount,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+    };
+
+    db.withdrawals.push(withdrawal);
+    const userIndex = db.users.findIndex((item) => item.id === Number(userId));
+    db.users[userIndex] = user;
+    await writeDB(db);
+
+    return { withdrawal, user };
+}
+
+async function updateWithdrawal(withdrawalId, status, adminId) {
+    const db = await readDB();
+    const withdrawal = db.withdrawals.find((item) => item.id === withdrawalId);
+
+    if (!withdrawal || withdrawal.status !== 'pending') {
+        return null;
+    }
+
+    const user = db.users.find((item) => item.id === Number(withdrawal.userId));
+    const referral = normalizeReferral(user?.referral);
+
+    withdrawal.status = status;
+    withdrawal.adminId = Number(adminId);
+    withdrawal.reviewedAt = new Date().toISOString();
+
+    if (status === 'paid') {
+        referral.totalPaidOut += Number(withdrawal.amount);
+    }
+
+    if (status === 'rejected') {
+        referral.balance += Number(withdrawal.amount);
+    }
+
+    if (user) {
+        user.referral = referral;
+        user.updatedAt = withdrawal.reviewedAt;
+    }
+
+    await writeDB(db);
+    return { withdrawal, user };
+}
+
 // --- КОМАНДА /start ---
 bot.onText(/^\/start(?:\s|$)/, async (msg) => {
     const chatId = msg.chat.id;
 
     try {
-        await upsertUserProfile(profileFromTelegram(msg.from));
+        const startArg = msg.text?.split(/\s+/)[1] || '';
+        const refMatch = startArg.match(/^ref_(\d+)$/);
+        const referredBy = refMatch ? Number(refMatch[1]) : null;
+        await upsertUserProfile(profileFromTelegram(msg.from), { referredBy });
         await sendStartMessage(chatId);
     } catch (error) {
         console.error('Ошибка в /start:', error.message);
@@ -505,7 +803,7 @@ bot.on('callback_query', async (query) => {
 
         // КНОПКА: О ПРОЕКТЕ
         if (query.data === 'about') {
-            await sendPhotoMessage(chatId, photoAbout, buildAboutText(), actionKeyboard());
+            await sendPhotoMessage(chatId, photoAbout, buildAboutText(), actionKeyboard({ referral: true }));
             return;
         }
 
@@ -513,8 +811,81 @@ bot.on('callback_query', async (query) => {
         if (query.data === 'reviews') {
             const db = await readDB();
             await sendPhotoMessage(chatId, photoReviews, buildPublicReviewsText(db.reviews), {
-                inline_keyboard: actionKeyboard({ leaveReview: true }).inline_keyboard
+                inline_keyboard: actionKeyboard({ leaveReview: true, referral: true }).inline_keyboard
             });
+            return;
+        }
+
+        // КНОПКА: РЕФЕРАЛЬНАЯ ПРОГРАММА
+        if (query.data === 'referral') {
+            const user = await upsertUserProfile(profile);
+            const referral = normalizeReferral(user?.referral);
+
+            if (referral.active) {
+                await sendPhotoMessage(chatId, photoReferral, buildReferralCabinetText(user), {
+                    inline_keyboard: [
+                        [{ text: '💸 Запросить вывод', callback_data: 'referral_withdraw' }],
+                        [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+                        [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+                    ]
+                });
+                return;
+            }
+
+            await sendPhotoMessage(chatId, photoReferral, buildReferralIntroText(), {
+                inline_keyboard: [
+                    [{ text: '🤝 Стать партнёром', callback_data: 'referral_join' }],
+                    [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+                    [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+                ]
+            });
+            return;
+        }
+
+        if (query.data === 'referral_join') {
+            await upsertUserProfile(profile);
+            referralDrafts.set(profile.id, { createdAt: new Date().toISOString() });
+            await bot.sendMessage(chatId, buildReferralDetailsPrompt(), { parse_mode: 'HTML' });
+            return;
+        }
+
+        if (query.data === 'referral_withdraw') {
+            const result = await createWithdrawal(profile.id);
+
+            if (!result) {
+                const user = await getUser(profile.id);
+                await bot.sendMessage(
+                    chatId,
+                    [
+                        '💸 <b>Вывод пока недоступен</b>',
+                        '',
+                        'На партнёрском балансе нет средств для вывода.',
+                        '',
+                        user?.referral?.active ? buildReferralCabinetText(user) : 'Сначала подключите реферальную программу.'
+                    ].join('\n'),
+                    { parse_mode: 'HTML', disable_web_page_preview: true }
+                );
+                return;
+            }
+
+            const { withdrawal, user } = result;
+            await bot.sendMessage(chatId, `✅ Запрос на вывод ${withdrawal.amount} ₽ отправлен админам. После выплаты вы получите уведомление.`);
+            await sendToAdmins(
+                buildWithdrawalAdminText(withdrawal, user),
+                {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✅ Выплачено', callback_data: `payout_approve_${withdrawal.id}` },
+                                { text: '❌ Отклонить', callback_data: `payout_reject_${withdrawal.id}` }
+                            ],
+                            [{ text: '💬 Написать партнёру', url: profileUrl(profile) }]
+                        ]
+                    }
+                }
+            );
             return;
         }
 
@@ -566,34 +937,67 @@ bot.on('callback_query', async (query) => {
 
         // АДМИН: ПОДТВЕРДИТЬ ОТЗЫВ
         if (query.data.startsWith('review_approve_')) {
-            if (query.from.id !== ADMIN_ID) return;
+            if (!isAdmin(query.from.id)) return;
             const reviewId = query.data.replace('review_approve_', '');
             const review = await updateReviewStatus(reviewId, 'approved');
 
             if (!review) {
-                await bot.sendMessage(ADMIN_ID, '⚠️ Отзыв не найден.');
+                await bot.sendMessage(chatId, '⚠️ Отзыв не найден.');
                 return;
             }
 
-            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `✅ Отзыв опубликован: ${stars(review.rating)} от ${review.displayName}`);
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await sendToAdmins(`✅ Отзыв опубликован: ${stars(review.rating)} от ${review.displayName}`);
             await bot.sendMessage(review.userId, '✅ Спасибо! Ваш отзыв прошёл модерацию и опубликован в блоке отзывов.');
             return;
         }
 
         // АДМИН: ОТКЛОНИТЬ ОТЗЫВ
         if (query.data.startsWith('review_reject_')) {
-            if (query.from.id !== ADMIN_ID) return;
+            if (!isAdmin(query.from.id)) return;
             const reviewId = query.data.replace('review_reject_', '');
             const review = await updateReviewStatus(reviewId, 'rejected');
 
             if (!review) {
-                await bot.sendMessage(ADMIN_ID, '⚠️ Отзыв не найден.');
+                await bot.sendMessage(chatId, '⚠️ Отзыв не найден.');
                 return;
             }
 
-            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `❌ Отзыв отклонён: ${stars(review.rating)} от ${review.displayName}`);
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await sendToAdmins(`❌ Отзыв отклонён: ${stars(review.rating)} от ${review.displayName}`);
+            return;
+        }
+
+        // АДМИН: ПОДТВЕРДИТЬ/ОТКЛОНИТЬ ВЫПЛАТУ ПАРТНЁРУ
+        if (query.data.startsWith('payout_approve_')) {
+            if (!isAdmin(query.from.id)) return;
+            const withdrawalId = query.data.replace('payout_approve_', '');
+            const result = await updateWithdrawal(withdrawalId, 'paid', query.from.id);
+
+            if (!result) {
+                await bot.sendMessage(chatId, '⚠️ Запрос на вывод уже обработан или не найден.');
+                return;
+            }
+
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await bot.sendMessage(result.user.id, `✅ Выплата ${result.withdrawal.amount} ₽ отправлена. Спасибо за участие в партнёрской программе VOIDLINK X.`);
+            await sendToAdmins(`✅ Выплата ${result.withdrawal.amount} ₽ партнёру ${result.user.id} отмечена как отправленная.`);
+            return;
+        }
+
+        if (query.data.startsWith('payout_reject_')) {
+            if (!isAdmin(query.from.id)) return;
+            const withdrawalId = query.data.replace('payout_reject_', '');
+            const result = await updateWithdrawal(withdrawalId, 'rejected', query.from.id);
+
+            if (!result) {
+                await bot.sendMessage(chatId, '⚠️ Запрос на вывод уже обработан или не найден.');
+                return;
+            }
+
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await bot.sendMessage(result.user.id, `❌ Запрос на вывод ${result.withdrawal.amount} ₽ отклонён. Сумма возвращена на партнёрский баланс.`);
+            await sendToAdmins(`❌ Запрос на вывод ${result.withdrawal.amount} ₽ партнёра ${result.user.id} отклонён.`);
             return;
         }
 
@@ -602,7 +1006,8 @@ bot.on('callback_query', async (query) => {
             await sendPhotoMessage(chatId, photoSupport, buildSupportText(), {
                 inline_keyboard: [
                     [{ text: '💬 Написать в поддержку', url: `https://t.me/${supportUsername}` }],
-                    [{ text: '💎 Купить доступ', callback_data: 'buy' }]
+                    [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+                    [{ text: '🤝 Реферальная программа', callback_data: 'referral' }]
                 ]
             });
             return;
@@ -610,7 +1015,7 @@ bot.on('callback_query', async (query) => {
 
         // ПОЛЬЗОВАТЕЛЬ НАЖАЛ "Я ОПЛАТИЛ"
         if (query.data === 'check_payment') {
-            await upsertUserProfile(profile);
+            const user = await upsertUserProfile(profile);
 
             if (!(await hasFreeLinks())) {
                 await sendPhotoMessage(
@@ -619,36 +1024,25 @@ bot.on('callback_query', async (query) => {
                     buildSoldOutText(),
                     actionKeyboard({ buy: false, reviews: true, supportText: '💬 Написать в поддержку' })
                 );
-                await bot.sendMessage(
-                    ADMIN_ID,
+                await sendToAdmins(
                     `⚠️ Пользователь ${profile.id} нажал «Я оплатил», но пул ссылок пуст. Проверьте оплату и добавьте ссылки через /addlink <url>.`
                 );
                 return;
             }
 
-            // Отправляем админу запрос на подтверждение
+            const request = await createPaymentRequest(profile);
             const keyboard = {
                 inline_keyboard: [
                     [
-                        { text: '✅ Подтвердить', callback_data: `confirm_${profile.id}` },
-                        { text: '❌ Отклонить', callback_data: `reject_${profile.id}` }
+                        { text: '✅ Подтвердить', callback_data: `confirm_${request.id}` },
+                        { text: '❌ Отклонить', callback_data: `reject_${request.id}` }
                     ],
                     [{ text: '💬 Написать пользователю', url: profileUrl(profile) }]
                 ]
             };
             
-            await bot.sendMessage(
-                ADMIN_ID, 
-                [
-                    '💰 <b>Новая заявка на оплату</b>',
-                    '',
-                    adminProfileText(profile),
-                    '',
-                    `💎 <b>Сумма:</b> ${escapeHtml(price)} ₽`,
-                    `🏷 <b>Метка ЮMoney:</b> <code>${profile.id}</code>`,
-                    '',
-                    '🧾 Проверьте ЮMoney и подтвердите доступ.'
-                ].join('\n'),
+            await sendToAdmins(
+                buildPaymentRequestAdminText(request, { ...profile, referredBy: user?.referredBy }),
                 { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true }
             );
             
@@ -658,13 +1052,21 @@ bot.on('callback_query', async (query) => {
 
         // АДМИН ПОДТВЕРДИЛ
         if (query.data.startsWith('confirm_')) {
-            if (query.from.id !== ADMIN_ID) return;
-            const userId = parseInt(query.data.split('_')[1]);
+            if (!isAdmin(query.from.id)) return;
+            const requestId = query.data.replace('confirm_', '');
+            const request = await getPendingPaymentRequest(requestId);
+
+            if (!request) {
+                await bot.sendMessage(chatId, '⚠️ Заявка уже обработана или не найдена.');
+                return;
+            }
+
+            const userId = Number(request.userId);
             
             let user = await getUser(userId);
             const link = await reserveFreeLink();
             if (!link) {
-                await bot.sendMessage(ADMIN_ID, `⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
+                await sendToAdmins(`⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
                 await bot.sendMessage(
                     userId,
                     buildSoldOutText(),
@@ -672,6 +1074,8 @@ bot.on('callback_query', async (query) => {
                 );
                 return;
             }
+
+            await updatePaymentRequest(requestId, 'approved', query.from.id);
 
             const existingLinks = normalizeUserLinks(user);
             const issuedAt = new Date().toISOString();
@@ -690,6 +1094,8 @@ bot.on('callback_query', async (query) => {
                 purchases: userLinks.length,
                 links: userLinks,
                 personalLink: userLinks[0]?.url || link,
+                referredBy: user?.referredBy || request.referredBy || null,
+                referral: user?.referral || null,
                 active: true,
                 createdAt: user?.createdAt || issuedAt,
                 firstPaidAt: user?.firstPaidAt || issuedAt,
@@ -697,23 +1103,40 @@ bot.on('callback_query', async (query) => {
             };
 
             await saveUser(user);
-            await addPayment({ user: userId, amount: price, date: new Date().toISOString() });
+            await addPayment({ user: userId, amount: price, requestId, referredBy: user.referredBy || null, date: new Date().toISOString() });
+            const referralCredit = await creditReferral(user);
 
             const linkToSend = link;
 
             await bot.sendMessage(userId, buildClientAccessText({ linkToSend }), { parse_mode: 'HTML', disable_web_page_preview: true });
-            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `✅ Оригинальная ссылка выдана пользователю ${userId}. Покупок у клиента: ${userLinks.length}. Ссылка удалена из пула.`);
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await sendToAdmins(`✅ Оригинальная ссылка выдана пользователю ${userId}. Покупок у клиента: ${userLinks.length}. Ссылка удалена из пула.`);
+
+            if (referralCredit) {
+                await bot.sendMessage(
+                    referralCredit.referrer.id,
+                    `💰 По вашей реферальной ссылке подтверждена покупка. Начислено ${referralCredit.amount} ₽. Баланс: ${referralCredit.referrer.referral.balance} ₽.`
+                );
+                await sendToAdmins(`🤝 Реферальное начисление: ${referralCredit.amount} ₽ партнёру ${referralCredit.referrer.id} за покупку ${userId}.`);
+            }
             return;
         }
 
         // АДМИН ОТКЛОНИЛ
         if (query.data.startsWith('reject_')) {
-            if (query.from.id !== ADMIN_ID) return;
-            const userId = parseInt(query.data.split('_')[1]);
+            if (!isAdmin(query.from.id)) return;
+            const requestId = query.data.replace('reject_', '');
+            const request = await updatePaymentRequest(requestId, 'rejected', query.from.id);
+
+            if (!request) {
+                await bot.sendMessage(chatId, '⚠️ Заявка уже обработана или не найдена.');
+                return;
+            }
+
+            const userId = Number(request.userId);
             await bot.sendMessage(userId, '❌ Платёж не подтверждён. Пожалуйста, проверьте сумму, кошелёк и попробуйте отправить заявку ещё раз.');
-            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: ADMIN_ID, message_id: query.message.message_id });
-            await bot.sendMessage(ADMIN_ID, `❌ Заявка пользователя ${userId} отклонена.`);
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
+            await sendToAdmins(`❌ Заявка пользователя ${userId} отклонена.`);
             return;
         }
 
@@ -727,6 +1150,43 @@ bot.on('message', async (msg) => {
     if (!msg.text || msg.text.startsWith('/')) return;
 
     const profile = profileFromTelegram(msg.from);
+    const referralDraft = referralDrafts.get(profile.id);
+    if (referralDraft) {
+        const details = msg.text.trim();
+
+        if (details.length < 15) {
+            await bot.sendMessage(msg.chat.id, '📝 Напишите чуть подробнее: ФИО, телефон и банк одним сообщением.');
+            return;
+        }
+
+        const user = await registerReferralPartner(profile.id, details);
+        referralDrafts.delete(profile.id);
+
+        await bot.sendMessage(
+            msg.chat.id,
+            [
+                '✅ <b>Партнёрская программа подключена</b>',
+                '',
+                'Ваша личная ссылка готова:',
+                referralLink(profile.id),
+                '',
+                'Все начисления будут отображаться в партнёрском кабинете.'
+            ].join('\n'),
+            {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🤝 Открыть кабинет', callback_data: 'referral' }],
+                        [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+                    ]
+                }
+            }
+        );
+        await sendToAdmins(`🤝 Новый партнёр: ${profile.id}\n\n${escapeHtml(details)}`, { parse_mode: 'HTML' });
+        return;
+    }
+
     const draft = reviewDrafts.get(profile.id);
     if (!draft) return;
 
@@ -774,8 +1234,7 @@ bot.on('message', async (msg) => {
         { parse_mode: 'HTML' }
     );
 
-    await bot.sendMessage(
-        ADMIN_ID,
+    await sendToAdmins(
         buildReviewModerationText(review),
         {
             parse_mode: 'HTML',
@@ -795,13 +1254,14 @@ bot.on('message', async (msg) => {
 
 // --- АДМИН-КОМАНДЫ ---
 bot.onText(/\/admin/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
-    await bot.sendMessage(ADMIN_ID, [
+    if (!isAdmin(msg.chat.id)) return;
+    await bot.sendMessage(msg.chat.id, [
         '🛰 <b>VOIDLINK X ADMIN</b>',
         '',
         '📦 /links — статус пула ссылок',
         '👥 /users — клиенты и Telegram ID',
         '💰 /stats — финансы',
+        '🤝 /affiliates — партнёры и выплаты',
         '💬 /support — контакт поддержки',
         '⭐ /reviews — блок отзывов',
         '➕ /addlink &lt;url&gt; — добавить ссылку'
@@ -813,7 +1273,7 @@ bot.onText(/\/support/, async (msg) => {
         msg.chat.id,
         photoSupport,
         buildSupportText(),
-        actionKeyboard({ supportText: '💬 Написать в поддержку' })
+        actionKeyboard({ referral: true, supportText: '💬 Написать в поддержку' })
     );
 });
 
@@ -823,19 +1283,44 @@ bot.onText(/\/reviews/, async (msg) => {
         msg.chat.id,
         photoReviews,
         buildPublicReviewsText(db.reviews),
-        actionKeyboard({ leaveReview: true })
+        actionKeyboard({ leaveReview: true, referral: true })
     );
 });
 
+bot.onText(/\/referral/, async (msg) => {
+    const profile = profileFromTelegram(msg.from);
+    const user = await upsertUserProfile(profile);
+    const referral = normalizeReferral(user?.referral);
+
+    if (referral.active) {
+        await sendPhotoMessage(msg.chat.id, photoReferral, buildReferralCabinetText(user), {
+            inline_keyboard: [
+                [{ text: '💸 Запросить вывод', callback_data: 'referral_withdraw' }],
+                [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+                [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+            ]
+        });
+        return;
+    }
+
+    await sendPhotoMessage(msg.chat.id, photoReferral, buildReferralIntroText(), {
+        inline_keyboard: [
+            [{ text: '🤝 Стать партнёром', callback_data: 'referral_join' }],
+            [{ text: '💎 Купить доступ', callback_data: 'buy' }],
+            [{ text: '💬 Поддержка', url: `https://t.me/${supportUsername}` }]
+        ]
+    });
+});
+
 bot.onText(/\/links/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
+    if (!isAdmin(msg.chat.id)) return;
     const links = await getLinks();
     const free = links.filter(l => l.status === 'free').length;
     const details = links.slice(0, 20).map((link, index) => {
         return `${index + 1}. 🟢 free\n   ${escapeHtml(link.url)}`;
     });
 
-    await bot.sendMessage(ADMIN_ID, [
+    await bot.sendMessage(msg.chat.id, [
         '📦 <b>Пул ссылок</b>',
         '',
         `🟢 Свободно: ${free}`,
@@ -847,10 +1332,10 @@ bot.onText(/\/links/, async (msg) => {
 });
 
 bot.onText(/\/users/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
+    if (!isAdmin(msg.chat.id)) return;
     const db = await readDB();
     const users = db.users.filter(u => normalizeUserLinks(u).length > 0 || Number(u.purchases || u.monthsPaid || 0) > 0);
-    if (!users.length) return bot.sendMessage(ADMIN_ID, '👥 Клиентов с подтверждёнными оплатами пока нет.');
+    if (!users.length) return bot.sendMessage(msg.chat.id, '👥 Клиентов с подтверждёнными оплатами пока нет.');
 
     let text = '👥 <b>Клиенты VOIDLINK X</b>\n\n';
     users.forEach((u, i) => {
@@ -870,28 +1355,68 @@ bot.onText(/\/users/, async (msg) => {
         });
         text += `🛡 Статус: ${status}\n\n`;
     });
-    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+});
+
+bot.onText(/\/affiliates/, async (msg) => {
+    if (!isAdmin(msg.chat.id)) return;
+    const db = await readDB();
+    const partners = db.users.filter((user) => user.referral?.active);
+    const pending = db.withdrawals.filter((item) => item.status === 'pending');
+
+    if (!partners.length && !pending.length) {
+        await bot.sendMessage(msg.chat.id, '🤝 Партнёров и активных заявок на вывод пока нет.');
+        return;
+    }
+
+    let text = '🤝 <b>Партнёрская программа</b>\n\n';
+
+    if (partners.length) {
+        text += '<b>Партнёры:</b>\n';
+        partners.forEach((user, index) => {
+            const referral = normalizeReferral(user.referral);
+            const username = user.username ? `@${user.username}` : 'не указан';
+            text += `${index + 1}. <code>${user.id}</code> | ${escapeHtml(username)}\n`;
+            text += `   Баланс: ${referral.balance} ₽ | начислено: ${referral.totalEarned} ₽ | выплачено: ${referral.totalPaidOut} ₽\n`;
+        });
+        text += '\n';
+    }
+
+    if (pending.length) {
+        text += '<b>Ожидают выплаты:</b>\n';
+        pending.forEach((item, index) => {
+            text += `${index + 1}. <code>${item.userId}</code> — ${item.amount} ₽ | <code>${item.id}</code>\n`;
+        });
+    }
+
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/stats/, async (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
+    if (!isAdmin(msg.chat.id)) return;
     const db = await readDB();
     const total = db.payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-    await bot.sendMessage(ADMIN_ID, [
+    const referralTotal = db.referralEarnings.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const pendingWithdrawals = db.withdrawals
+        .filter((item) => item.status === 'pending')
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    await bot.sendMessage(msg.chat.id, [
         '💰 <b>Финансы</b>',
         '',
         `💎 Всего заработано: ${total} ₽`,
-        `🧾 Транзакций: ${db.payments.length}`
+        `🧾 Транзакций: ${db.payments.length}`,
+        `🤝 Реферальных начислений: ${referralTotal} ₽`,
+        `💸 Ожидают выплаты: ${pendingWithdrawals} ₽`
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/addlink (.+)/, async (msg, match) => {
-    if (msg.chat.id !== ADMIN_ID) return;
+    if (!isAdmin(msg.chat.id)) return;
     const newUrl = match[1];
     const links = await getLinks();
     links.push({ url: newUrl, status: 'free' });
     await saveLinks(links);
-    await bot.sendMessage(ADMIN_ID, `✅ Ссылка добавлена в пул:\n${newUrl}`);
+    await bot.sendMessage(msg.chat.id, `✅ Ссылка добавлена в пул:\n${newUrl}`);
 });
 
 bot.on('polling_error', (error) => {
@@ -922,17 +1447,24 @@ async function configureBotProfile() {
         await bot.setMyCommands([
             { command: 'start', description: '🛰 Открыть VOIDLINK X' },
             { command: 'support', description: '💬 Поддержка' },
-            { command: 'reviews', description: '⭐ Отзывы' }
+            { command: 'reviews', description: '⭐ Отзывы' },
+            { command: 'referral', description: '🤝 Реферальная программа' }
         ]);
-        await bot.setMyCommands([
+        const adminCommands = [
             { command: 'start', description: '🛰 Открыть VOIDLINK X' },
             { command: 'support', description: '💬 Поддержка' },
             { command: 'reviews', description: '⭐ Отзывы' },
+            { command: 'referral', description: '🤝 Реферальная программа' },
             { command: 'admin', description: '🛠 Админ-панель' },
             { command: 'links', description: '📦 Пул ссылок' },
             { command: 'users', description: '👥 Клиенты' },
-            { command: 'stats', description: '💰 Финансы' }
-        ], { scope: { type: 'chat', chat_id: ADMIN_ID } });
+            { command: 'stats', description: '💰 Финансы' },
+            { command: 'affiliates', description: '🤝 Партнёры' }
+        ];
+
+        for (const adminId of adminIds) {
+            await bot.setMyCommands(adminCommands, { scope: { type: 'chat', chat_id: adminId } });
+        }
     } catch (error) {
         console.error('Не удалось обновить описание бота:', error.message);
     }
@@ -944,7 +1476,7 @@ async function startBot() {
     }
 
     if (!ADMIN_ID) {
-        throw new Error('ADMIN_ID не задан или не является числом');
+        throw new Error('ADMIN_ID/ADMIN_IDS не задан или не является числом');
     }
 
     await bot.deleteWebHook({ drop_pending_updates: true });

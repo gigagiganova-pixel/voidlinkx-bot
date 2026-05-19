@@ -7,7 +7,7 @@ async function initDB() {
     try {
         await fs.access(DB_FILE);
     } catch {
-        await fs.writeFile(DB_FILE, JSON.stringify({ users: [], payments: [], reviews: [] }, null, 2));
+        await fs.writeFile(DB_FILE, JSON.stringify({ users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] }, null, 2));
     }
 }
 
@@ -19,9 +19,12 @@ async function readDB() {
         db.users = Array.isArray(db.users) ? db.users : [];
         db.payments = Array.isArray(db.payments) ? db.payments : [];
         db.reviews = Array.isArray(db.reviews) ? db.reviews : [];
+        db.paymentRequests = Array.isArray(db.paymentRequests) ? db.paymentRequests : [];
+        db.withdrawals = Array.isArray(db.withdrawals) ? db.withdrawals : [];
+        db.referralEarnings = Array.isArray(db.referralEarnings) ? db.referralEarnings : [];
         return db;
     } catch {
-        return { users: [], payments: [], reviews: [] };
+        return { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
     }
 }
 
@@ -50,7 +53,7 @@ async function addPayment(payment) {
 }
 
 async function resetDB() {
-    const empty = { users: [], payments: [], reviews: [] };
+    const empty = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
     await writeDB(empty);
     return empty;
 }
