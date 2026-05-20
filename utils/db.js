@@ -1,13 +1,22 @@
 const fs = require('fs').promises;
 const path = require('path');
-// Файл database.json лежит в корне, а не в папке utils
-const DB_FILE = path.resolve(__dirname, '../database.json'); 
+
+const ROOT_DB_FILE = path.resolve(__dirname, '../database.json');
+const DATA_DIR = process.env.DATA_DIR || (process.env.AMVERUM ? '/data' : '');
+const DB_FILE = DATA_DIR ? path.join(DATA_DIR, 'database.json') : ROOT_DB_FILE;
+const EMPTY_DB = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
 
 async function initDB() {
     try {
         await fs.access(DB_FILE);
     } catch {
-        await fs.writeFile(DB_FILE, JSON.stringify({ users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] }, null, 2));
+        await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
+        try {
+            const seed = await fs.readFile(ROOT_DB_FILE, 'utf-8');
+            await fs.writeFile(DB_FILE, seed);
+        } catch {
+            await fs.writeFile(DB_FILE, JSON.stringify(EMPTY_DB, null, 2));
+        }
     }
 }
 
@@ -24,11 +33,12 @@ async function readDB() {
         db.referralEarnings = Array.isArray(db.referralEarnings) ? db.referralEarnings : [];
         return db;
     } catch {
-        return { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
+        return { ...EMPTY_DB };
     }
 }
 
 async function writeDB(data) {
+    await initDB();
     await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
 }
 
@@ -53,7 +63,7 @@ async function addPayment(payment) {
 }
 
 async function resetDB() {
-    const empty = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
+    const empty = { ...EMPTY_DB };
     await writeDB(empty);
     return empty;
 }
