@@ -6,7 +6,8 @@ const ROOT_DB_FILE = path.resolve(__dirname, '../database.json');
 const hasDataMount = process.platform !== 'win32' && fsSync.existsSync('/data');
 const DATA_DIR = process.env.DATA_DIR || ((process.env.AMVERUM || hasDataMount) ? '/data' : '');
 const DB_FILE = DATA_DIR ? path.join(DATA_DIR, 'database.json') : ROOT_DB_FILE;
-const EMPTY_DB = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [] };
+const EMPTY_DB = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [], meta: {} };
+let writeQueue = Promise.resolve();
 
 async function readJsonFile(file, fallback) {
     try {
@@ -22,6 +23,17 @@ function hasBusinessData(db = {}) {
         .some((key) => Array.isArray(db[key]) && db[key].length > 0);
 }
 
+function normalizeDB(db = {}) {
+    db.users = Array.isArray(db.users) ? db.users : [];
+    db.payments = Array.isArray(db.payments) ? db.payments : [];
+    db.reviews = Array.isArray(db.reviews) ? db.reviews : [];
+    db.paymentRequests = Array.isArray(db.paymentRequests) ? db.paymentRequests : [];
+    db.withdrawals = Array.isArray(db.withdrawals) ? db.withdrawals : [];
+    db.referralEarnings = Array.isArray(db.referralEarnings) ? db.referralEarnings : [];
+    db.meta = db.meta && typeof db.meta === 'object' ? db.meta : {};
+    return db;
+}
+
 async function seedDBFile() {
     await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
     try {
@@ -34,13 +46,26 @@ async function seedDBFile() {
 
 async function writeJsonAtomic(file, data) {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    const tmpFile = `${file}.tmp`;
+    const tmpFile = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
     const backupFile = `${file}.bak`;
     try {
         await fs.copyFile(file, backupFile);
     } catch {}
-    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
-    await fs.rename(tmpFile, file);
+    try {
+        await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
+        await fs.rename(tmpFile, file);
+    } catch (error) {
+        try {
+            await fs.unlink(tmpFile);
+        } catch {}
+        throw error;
+    }
+}
+
+function enqueueWrite(task) {
+    const run = writeQueue.then(task, task);
+    writeQueue = run.catch(() => {});
+    return run;
 }
 
 async function hydratePersistentDB() {
@@ -68,22 +93,27 @@ async function readDB() {
     await initDB();
     try {
         const data = (await fs.readFile(DB_FILE, 'utf-8')).replace(/^\uFEFF/, '');
-        const db = JSON.parse(data);
-        db.users = Array.isArray(db.users) ? db.users : [];
-        db.payments = Array.isArray(db.payments) ? db.payments : [];
-        db.reviews = Array.isArray(db.reviews) ? db.reviews : [];
-        db.paymentRequests = Array.isArray(db.paymentRequests) ? db.paymentRequests : [];
-        db.withdrawals = Array.isArray(db.withdrawals) ? db.withdrawals : [];
-        db.referralEarnings = Array.isArray(db.referralEarnings) ? db.referralEarnings : [];
-        return db;
+        return normalizeDB(JSON.parse(data));
     } catch {
-        return { ...EMPTY_DB };
+        return normalizeDB({ ...EMPTY_DB });
     }
 }
 
 async function writeDB(data) {
-    await initDB();
-    await writeJsonAtomic(DB_FILE, data);
+    return enqueueWrite(async () => {
+        await initDB();
+        await writeJsonAtomic(DB_FILE, normalizeDB(data));
+    });
+}
+
+async function updateDB(mutator) {
+    return enqueueWrite(async () => {
+        await initDB();
+        const db = normalizeDB(await readJsonFile(DB_FILE, { ...EMPTY_DB }));
+        const result = await mutator(db);
+        await writeJsonAtomic(DB_FILE, normalizeDB(db));
+        return result;
+    });
 }
 
 async function getUser(id) {
@@ -92,18 +122,20 @@ async function getUser(id) {
 }
 
 async function saveUser(user) {
-    const db = await readDB();
-    user.id = Number(user.id);
-    const index = db.users.findIndex(x => x.id === user.id);
-    if (index >= 0) db.users[index] = user;
-    else db.users.push(user);
-    await writeDB(db);
+    return updateDB((db) => {
+        user.id = Number(user.id);
+        const index = db.users.findIndex(x => x.id === user.id);
+        if (index >= 0) db.users[index] = user;
+        else db.users.push(user);
+        return user;
+    });
 }
 
 async function addPayment(payment) {
-    const db = await readDB();
-    db.payments.push(payment);
-    await writeDB(db);
+    return updateDB((db) => {
+        db.payments.push(payment);
+        return payment;
+    });
 }
 
 async function resetDB() {
@@ -112,4 +144,4 @@ async function resetDB() {
     return empty;
 }
 
-module.exports = { getUser, saveUser, addPayment, readDB, writeDB, resetDB };
+module.exports = { getUser, saveUser, addPayment, readDB, writeDB, updateDB, resetDB };

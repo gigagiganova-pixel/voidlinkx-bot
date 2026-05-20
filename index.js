@@ -10,7 +10,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
-const { getUser, saveUser, addPayment, readDB, writeDB } = require('./utils/db');
+const { getUser, saveUser, addPayment, readDB, writeDB, updateDB } = require('./utils/db');
 const { getLinks, saveLinks, reserveFreeLink } = require('./utils/links');
 
 // --- НАСТРОЙКИ ---
@@ -46,11 +46,13 @@ const referralPercent = 10;
 const referralCommission = Math.round(Number(price) * referralPercent / 100);
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
+const lowLinksThreshold = Number(process.env.LOW_LINKS_THRESHOLD || 3);
 let pollingConflictShown = false;
 const reviewDrafts = new Map();
 const referralDrafts = new Map();
 const broadcastDrafts = new Set();
 const photoFileIdCache = new Map();
+const processingPaymentRequests = new Set();
 
 const MAIN_KEYBOARD = {
     inline_keyboard: [
@@ -573,6 +575,55 @@ async function hasFreeLinks() {
     return links.some((link) => link.status === 'free');
 }
 
+async function freeLinksCount() {
+    const links = await getLinks();
+    return links.filter((link) => link.status === 'free').length;
+}
+
+async function notifyLowLinksIfNeeded(context = 'pool') {
+    if (!Number.isFinite(lowLinksThreshold) || lowLinksThreshold < 1) {
+        return null;
+    }
+
+    const freeCount = await freeLinksCount();
+    const shouldNotify = freeCount <= lowLinksThreshold;
+    const db = await readDB();
+    db.meta = db.meta && typeof db.meta === 'object' ? db.meta : {};
+
+    if (!shouldNotify) {
+        if (db.meta.lowLinksAlertCount != null || db.meta.lowLinksAlertAt) {
+            db.meta.lowLinksAlertCount = null;
+            db.meta.lowLinksAlertAt = null;
+            db.meta.lowLinksAlertContext = null;
+            await writeDB(db);
+        }
+        return freeCount;
+    }
+
+    if (db.meta.lowLinksAlertCount === freeCount) {
+        return freeCount;
+    }
+
+    db.meta.lowLinksAlertCount = freeCount;
+    db.meta.lowLinksAlertAt = new Date().toISOString();
+    db.meta.lowLinksAlertContext = context;
+    await writeDB(db);
+
+    const text = [
+        '⚠️ <b>В пуле мало ссылок</b>',
+        '',
+        `Свободных ссылок осталось: <b>${freeCount}</b>`,
+        `Порог уведомления: ${lowLinksThreshold}`,
+        `Контекст: ${escapeHtml(context)}`,
+        '',
+        'Добавить новую ссылку можно командой:',
+        '<code>/addlink https://example.netlify.app/</code>'
+    ].join('\n');
+
+    await sendToAdmins(text, { parse_mode: 'HTML', disable_web_page_preview: true });
+    return freeCount;
+}
+
 async function notifyAdminError(context, error) {
     if (!ADMIN_ID) return;
 
@@ -592,46 +643,54 @@ async function notifyAdminError(context, error) {
 }
 
 async function addReview(review) {
-    const db = await readDB();
-    db.reviews.push(review);
-    await writeDB(db);
+    return updateDB((db) => {
+        db.reviews.push(review);
+        return review;
+    });
 }
 
 async function updateReviewStatus(reviewId, status) {
-    const db = await readDB();
-    const review = db.reviews.find((item) => item.id === reviewId);
+    return updateDB((db) => {
+        const review = db.reviews.find((item) => item.id === reviewId);
 
-    if (!review || review.status !== 'pending') {
-        return null;
-    }
+        if (!review || review.status !== 'pending') {
+            return null;
+        }
 
-    review.status = status;
-    review.reviewedAt = new Date().toISOString();
+        review.status = status;
+        review.reviewedAt = new Date().toISOString();
 
-    if (status === 'approved') {
-        review.approvedAt = review.reviewedAt;
-    }
+        if (status === 'approved') {
+            review.approvedAt = review.reviewedAt;
+        }
 
-    await writeDB(db);
-    return review;
+        return review;
+    });
 }
 
 async function createPaymentRequest(profile) {
-    const db = await readDB();
-    const user = db.users.find((item) => item.id === Number(profile.id));
-    const request = {
-        id: `${Date.now()}_${profile.id}`,
-        userId: Number(profile.id),
-        profile,
-        amount: Number(price),
-        referredBy: user?.referredBy || null,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-    };
+    return updateDB((db) => {
+        const userId = Number(profile.id);
+        const existing = db.paymentRequests.find((item) => item.userId === userId && item.status === 'pending');
 
-    db.paymentRequests.push(request);
-    await writeDB(db);
-    return request;
+        if (existing) {
+            return { request: existing, duplicate: true };
+        }
+
+        const user = db.users.find((item) => item.id === userId);
+        const request = {
+            id: `${Date.now()}_${profile.id}`,
+            userId,
+            profile,
+            amount: Number(price),
+            referredBy: user?.referredBy || null,
+            status: 'pending',
+            createdAt: new Date().toISOString()
+        };
+
+        db.paymentRequests.push(request);
+        return { request, duplicate: false };
+    });
 }
 
 async function getPendingPaymentRequest(requestId) {
@@ -640,18 +699,18 @@ async function getPendingPaymentRequest(requestId) {
 }
 
 async function updatePaymentRequest(requestId, status, adminId) {
-    const db = await readDB();
-    const request = db.paymentRequests.find((item) => item.id === requestId);
+    return updateDB((db) => {
+        const request = db.paymentRequests.find((item) => item.id === requestId);
 
-    if (!request || request.status !== 'pending') {
-        return null;
-    }
+        if (!request || request.status !== 'pending') {
+            return null;
+        }
 
-    request.status = status;
-    request.adminId = Number(adminId);
-    request.reviewedAt = new Date().toISOString();
-    await writeDB(db);
-    return request;
+        request.status = status;
+        request.adminId = Number(adminId);
+        request.reviewedAt = new Date().toISOString();
+        return request;
+    });
 }
 
 async function registerReferralPartner(userId, details) {
@@ -683,101 +742,93 @@ async function creditReferral(buyer) {
         return null;
     }
 
-    const referrer = await getUser(referrerId);
-    if (!referrer?.referral?.active) {
-        return null;
-    }
+    return updateDB((db) => {
+        const referrer = db.users.find((item) => item.id === referrerId);
+        if (!referrer?.referral?.active) {
+            return null;
+        }
 
-    const db = await readDB();
-    const referral = normalizeReferral(referrer.referral);
-    const commission = referralCommission;
+        const referral = normalizeReferral(referrer.referral);
+        const commission = referralCommission;
 
-    referral.balance += commission;
-    referral.totalEarned += commission;
+        referral.balance += commission;
+        referral.totalEarned += commission;
 
-    referrer.referral = referral;
-    referrer.referralInvitedCount = Number(referrer.referralInvitedCount || 0) + 1;
-    referrer.updatedAt = new Date().toISOString();
+        referrer.referral = referral;
+        referrer.referralInvitedCount = Number(referrer.referralInvitedCount || 0) + 1;
+        referrer.updatedAt = new Date().toISOString();
 
-    const userIndex = db.users.findIndex((item) => item.id === Number(referrer.id));
-    if (userIndex >= 0) {
-        db.users[userIndex] = referrer;
-    }
+        db.referralEarnings.push({
+            id: `${Date.now()}_${buyer.id}_${referrerId}`,
+            referrerId,
+            buyerId: Number(buyer.id),
+            amount: commission,
+            percent: referralPercent,
+            purchaseAmount: Number(price),
+            createdAt: new Date().toISOString()
+        });
 
-    db.referralEarnings.push({
-        id: `${Date.now()}_${buyer.id}_${referrerId}`,
-        referrerId,
-        buyerId: Number(buyer.id),
-        amount: commission,
-        percent: referralPercent,
-        purchaseAmount: Number(price),
-        createdAt: new Date().toISOString()
+        return { referrer, amount: commission };
     });
-
-    await writeDB(db);
-    return { referrer, amount: commission };
 }
 
 async function createWithdrawal(userId) {
-    const db = await readDB();
-    const user = db.users.find((item) => item.id === Number(userId));
-    const referral = normalizeReferral(user?.referral);
+    return updateDB((db) => {
+        const user = db.users.find((item) => item.id === Number(userId));
+        const referral = normalizeReferral(user?.referral);
 
-    if (!user || !referral.active || referral.balance <= 0) {
-        return null;
-    }
+        if (!user || !referral.active || referral.balance <= 0) {
+            return null;
+        }
 
-    const amount = referral.balance;
-    referral.balance = 0;
-    user.referral = referral;
-    user.updatedAt = new Date().toISOString();
+        const amount = referral.balance;
+        referral.balance = 0;
+        user.referral = referral;
+        user.updatedAt = new Date().toISOString();
 
-    const withdrawal = {
-        id: `${Date.now()}_${userId}`,
-        userId: Number(userId),
-        amount,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-    };
+        const withdrawal = {
+            id: `${Date.now()}_${userId}`,
+            userId: Number(userId),
+            amount,
+            status: 'pending',
+            createdAt: new Date().toISOString()
+        };
 
-    db.withdrawals.push(withdrawal);
-    const userIndex = db.users.findIndex((item) => item.id === Number(userId));
-    db.users[userIndex] = user;
-    await writeDB(db);
-
-    return { withdrawal, user };
+        db.withdrawals.push(withdrawal);
+        return { withdrawal, user };
+    });
 }
 
 async function updateWithdrawal(withdrawalId, status, adminId) {
-    const db = await readDB();
-    const withdrawal = db.withdrawals.find((item) => item.id === withdrawalId);
+    return updateDB((db) => {
+        const withdrawal = db.withdrawals.find((item) => item.id === withdrawalId);
 
-    if (!withdrawal || withdrawal.status !== 'pending') {
-        return null;
-    }
+        if (!withdrawal || withdrawal.status !== 'pending') {
+            return null;
+        }
 
-    const user = db.users.find((item) => item.id === Number(withdrawal.userId));
-    const referral = normalizeReferral(user?.referral);
+        const user = db.users.find((item) => item.id === Number(withdrawal.userId));
+        const referral = normalizeReferral(user?.referral);
 
-    withdrawal.status = status;
-    withdrawal.adminId = Number(adminId);
-    withdrawal.reviewedAt = new Date().toISOString();
+        withdrawal.status = status;
+        withdrawal.adminId = Number(adminId);
+        withdrawal.reviewedAt = new Date().toISOString();
 
-    if (status === 'paid') {
-        referral.totalPaidOut += Number(withdrawal.amount);
-    }
+        if (status === 'paid') {
+            referral.totalPaidOut += Number(withdrawal.amount);
+        }
 
-    if (status === 'rejected') {
-        referral.balance += Number(withdrawal.amount);
-    }
+        if (status === 'rejected') {
+            referral.balance += Number(withdrawal.amount);
+        }
 
-    if (user) {
-        user.referral = referral;
-        user.updatedAt = withdrawal.reviewedAt;
-    }
+        if (user) {
+            user.referral = referral;
+            user.updatedAt = withdrawal.reviewedAt;
+        }
 
-    await writeDB(db);
-    return { withdrawal, user };
+        return { withdrawal, user };
+    });
 }
 
 async function broadcastToUsers(text) {
@@ -1104,7 +1155,17 @@ bot.on('callback_query', async (query) => {
                 return;
             }
 
-            const request = await createPaymentRequest(profile);
+            const { request, duplicate } = await createPaymentRequest(profile);
+
+            if (duplicate) {
+                await bot.sendMessage(
+                    profile.id,
+                    '⏳ Ваша заявка уже на проверке. Не нужно нажимать повторно: администратор увидит оплату и выдаст доступ после проверки.',
+                    { reply_markup: actionKeyboard({ buy: false, reviews: true, supportText: '💬 Написать в поддержку' }) }
+                );
+                return;
+            }
+
             const keyboard = {
                 inline_keyboard: [
                     [
@@ -1128,9 +1189,17 @@ bot.on('callback_query', async (query) => {
         if (query.data.startsWith('confirm_')) {
             if (!isAdmin(query.from.id)) return;
             const requestId = query.data.replace('confirm_', '');
+
+            if (processingPaymentRequests.has(requestId)) {
+                await bot.sendMessage(chatId, '⏳ Эта заявка уже обрабатывается. Подождите несколько секунд.');
+                return;
+            }
+
+            processingPaymentRequests.add(requestId);
             const request = await getPendingPaymentRequest(requestId);
 
             if (!request) {
+                processingPaymentRequests.delete(requestId);
                 await bot.sendMessage(chatId, '⚠️ Заявка уже обработана или не найдена.');
                 return;
             }
@@ -1140,6 +1209,7 @@ bot.on('callback_query', async (query) => {
             let user = await getUser(userId);
             const link = await reserveFreeLink();
             if (!link) {
+                processingPaymentRequests.delete(requestId);
                 await sendToAdmins(`⚠️ Нет свободных ссылок для пользователя ${userId}. Добавьте ссылки через /addlink <url>.`);
                 await bot.sendMessage(
                     userId,
@@ -1149,7 +1219,13 @@ bot.on('callback_query', async (query) => {
                 return;
             }
 
-            await updatePaymentRequest(requestId, 'approved', query.from.id);
+            const approvedRequest = await updatePaymentRequest(requestId, 'approved', query.from.id);
+
+            if (!approvedRequest) {
+                processingPaymentRequests.delete(requestId);
+                await bot.sendMessage(chatId, '⚠️ Заявка уже обработана другим администратором.');
+                return;
+            }
 
             const existingLinks = normalizeUserLinks(user);
             const issuedAt = new Date().toISOString();
@@ -1194,6 +1270,9 @@ bot.on('callback_query', async (query) => {
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id });
             await sendToAdmins(`✅ Оригинальная ссылка выдана пользователю ${userId}. Покупок у клиента: ${userLinks.length}. Ссылка удалена из пула.`);
 
+            await notifyLowLinksIfNeeded(`выдача ссылки пользователю ${userId}`);
+            processingPaymentRequests.delete(requestId);
+
             if (referralCredit) {
                 await bot.sendMessage(
                     referralCredit.referrer.id,
@@ -1223,6 +1302,9 @@ bot.on('callback_query', async (query) => {
         }
 
     } catch (error) {
+        if (query.data && query.data.startsWith('confirm_')) {
+            processingPaymentRequests.delete(query.data.replace('confirm_', ''));
+        }
         console.error('Ошибка в callback_query:', error.message);
         await notifyAdminError(`callback ${query.data || 'unknown'} от ${query.from?.id || chatId}`, error);
     }
@@ -1563,6 +1645,7 @@ bot.onText(/\/addlink (.+)/, async (msg, match) => {
     const links = await getLinks();
     links.push({ url: newUrl, status: 'free' });
     await saveLinks(links);
+    await notifyLowLinksIfNeeded('добавление ссылки администратором');
     await bot.sendMessage(msg.chat.id, `✅ Ссылка добавлена в пул:\n${newUrl}`);
 });
 
