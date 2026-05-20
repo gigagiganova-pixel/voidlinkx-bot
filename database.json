@@ -1,8 +1,59 @@
 {
-  "users": [],
-  "payments": [],
+  "users": [
+    {
+      "id": 231806859,
+      "telegramId": 231806859,
+      "username": "sullen_photographer",
+      "firstName": "SERGEY MIRONOV",
+      "lastName": "",
+      "languageCode": "",
+      "purchases": 1,
+      "links": [
+        {
+          "url": "https://spontaneous-belekoy-198853.netlify.app/",
+          "issuedAt": "2026-05-20T06:10:00.000Z"
+        }
+      ],
+      "personalLink": "https://spontaneous-belekoy-198853.netlify.app/",
+      "referredBy": null,
+      "referral": null,
+      "active": true,
+      "createdAt": "2026-05-20T06:10:00.000Z",
+      "firstPaidAt": "2026-05-20T06:10:00.000Z",
+      "lastSeenAt": "2026-05-20T06:10:00.000Z",
+      "lastAction": "purchase_confirmed",
+      "updatedAt": "2026-05-20T06:10:00.000Z"
+    }
+  ],
+  "payments": [
+    {
+      "user": 231806859,
+      "amount": "250",
+      "requestId": "restored_2026-05-20_231806859",
+      "referredBy": null,
+      "date": "2026-05-20T06:18:00.000Z"
+    }
+  ],
   "reviews": [],
-  "paymentRequests": [],
+  "paymentRequests": [
+    {
+      "id": "restored_2026-05-20_231806859",
+      "userId": 231806859,
+      "profile": {
+        "id": 231806859,
+        "username": "sullen_photographer",
+        "firstName": "SERGEY MIRONOV",
+        "lastName": "",
+        "languageCode": ""
+      },
+      "amount": 250,
+      "referredBy": null,
+      "status": "approved",
+      "createdAt": "2026-05-20T06:10:00.000Z",
+      "reviewedAt": "2026-05-20T06:18:00.000Z",
+      "adminId": 964138741
+    }
+  ],
   "withdrawals": [],
   "referralEarnings": []
 }

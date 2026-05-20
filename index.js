@@ -113,14 +113,8 @@ async function sendToAdmins(text, options = {}) {
 }
 
 function activityStats(users = []) {
-    const now = Date.now();
-    const activeWindowMs = 5 * 60 * 1000;
-    const dayMs = 24 * 60 * 60 * 1000;
-
     return {
-        total: users.length,
-        activeNow: users.filter((user) => user.lastSeenAt && now - new Date(user.lastSeenAt).getTime() <= activeWindowMs).length,
-        activeToday: users.filter((user) => user.lastSeenAt && now - new Date(user.lastSeenAt).getTime() <= dayMs).length
+        total: users.length
     };
 }
 
@@ -1532,9 +1526,7 @@ bot.onText(/\/stats/, async (msg) => {
         `💸 Ожидают выплаты: ${pendingWithdrawals} ₽`,
         '',
         '📊 <b>Активность бота</b>',
-        `👥 Всего открывали/нажимали: ${activity.total}`,
-        `🟢 Активны за 5 минут: ${activity.activeNow}`,
-        `🕘 Активны за 24 часа: ${activity.activeToday}`
+        `👥 Всего открывали/нажимали: ${activity.total}`
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
