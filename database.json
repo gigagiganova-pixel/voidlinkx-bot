@@ -23,15 +23,50 @@
       "lastSeenAt": "2026-05-20T06:10:00.000Z",
       "lastAction": "purchase_confirmed",
       "updatedAt": "2026-05-20T06:10:00.000Z"
+    },
+    {
+      "id": 8681414533,
+      "telegramId": 8681414533,
+      "username": "ja_0102",
+      "firstName": "Droid Almo",
+      "lastName": "",
+      "languageCode": "",
+      "purchases": 1,
+      "links": [
+        {
+          "url": "https://peppy-valkyrie-b24c02.netlify.app/",
+          "issuedAt": "2026-05-20T11:35:00.000Z"
+        }
+      ],
+      "personalLink": "https://peppy-valkyrie-b24c02.netlify.app/",
+      "referredBy": null,
+      "referral": null,
+      "active": true,
+      "createdAt": "2026-05-20T11:35:00.000Z",
+      "firstPaidAt": "2026-05-20T11:35:00.000Z",
+      "lastSeenAt": "2026-05-20T11:35:00.000Z",
+      "lastAction": "purchase_confirmed",
+      "updatedAt": "2026-05-20T11:35:00.000Z"
     }
   ],
   "payments": [
     {
       "user": 231806859,
-      "amount": "250",
+      "amount": 250,
+      "netAmount": 242.5,
+      "feeAmount": 7.5,
       "requestId": "restored_2026-05-20_231806859",
       "referredBy": null,
       "date": "2026-05-20T06:18:00.000Z"
+    },
+    {
+      "user": 8681414533,
+      "amount": 250,
+      "netAmount": 242.5,
+      "feeAmount": 7.5,
+      "requestId": "restored_2026-05-20_8681414533",
+      "referredBy": null,
+      "date": "2026-05-20T11:35:00.000Z"
     }
   ],
   "reviews": [],
@@ -51,6 +86,23 @@
       "status": "approved",
       "createdAt": "2026-05-20T06:10:00.000Z",
       "reviewedAt": "2026-05-20T06:18:00.000Z",
+      "adminId": 964138741
+    },
+    {
+      "id": "restored_2026-05-20_8681414533",
+      "userId": 8681414533,
+      "profile": {
+        "id": 8681414533,
+        "username": "ja_0102",
+        "firstName": "Droid Almo",
+        "lastName": "",
+        "languageCode": ""
+      },
+      "amount": 250,
+      "referredBy": null,
+      "status": "approved",
+      "createdAt": "2026-05-20T11:35:00.000Z",
+      "reviewedAt": "2026-05-20T11:35:00.000Z",
       "adminId": 964138741
     }
   ],

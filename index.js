@@ -1,6 +1,6 @@
 const dotenvResult = require('dotenv').config();
 const fileEnv = dotenvResult.parsed || {};
-['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'REGULAR_PRICE', 'DISCOUNT_UNTIL_TEXT', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
+['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'PAYMENT_NET_AMOUNT', 'REGULAR_PRICE', 'DISCOUNT_UNTIL_TEXT', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
     if (!process.env[key] && fileEnv[key]) {
         process.env[key] = fileEnv[key];
     }
@@ -33,6 +33,9 @@ const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
 const photoReferral = path.resolve(__dirname, 'assets/referral.jpg');
 
 const price = process.env.PRICE || '500';
+const paymentGrossAmount = Number(price);
+const paymentNetAmount = Number(process.env.PAYMENT_NET_AMOUNT || (paymentGrossAmount * 0.97).toFixed(2));
+const paymentFeeAmount = Number((paymentGrossAmount - paymentNetAmount).toFixed(2));
 const regularPrice = process.env.REGULAR_PRICE || '500';
 const discountUntilText = process.env.DISCOUNT_UNTIL_TEXT || 'примерно через неделю';
 const referralPercent = 10;
@@ -172,6 +175,10 @@ function buildPriceLine() {
         `💎 <b>Стоимость сейчас:</b> ${escapeHtml(price)} ₽`,
         `🔥 Временная скидка: -${discount || 50} ₽. ${escapeHtml(discountUntilText)} цена вернётся к ${escapeHtml(regularPrice)} ₽.`
     ].join('\n');
+}
+
+function formatMoney(value) {
+    return Number(value || 0).toFixed(2).replace(/\.00$/, '');
 }
 
 function normalizeUserLinks(user = {}) {
@@ -1166,7 +1173,15 @@ bot.on('callback_query', async (query) => {
             };
 
             await saveUser(user);
-            await addPayment({ user: userId, amount: price, requestId, referredBy: user.referredBy || null, date: new Date().toISOString() });
+            await addPayment({
+                user: userId,
+                amount: paymentGrossAmount,
+                netAmount: paymentNetAmount,
+                feeAmount: paymentFeeAmount,
+                requestId,
+                referredBy: user.referredBy || null,
+                date: new Date().toISOString()
+            });
             const referralCredit = await creditReferral(user);
 
             const linkToSend = link;
@@ -1511,7 +1526,13 @@ bot.onText(/\/affiliates/, async (msg) => {
 bot.onText(/\/stats/, async (msg) => {
     if (!isAdmin(msg.chat.id)) return;
     const db = await readDB();
-    const total = db.payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const grossTotal = db.payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const netTotal = db.payments.reduce((sum, p) => sum + Number(p.netAmount ?? p.amount ?? 0), 0);
+    const feeTotal = db.payments.reduce((sum, p) => {
+        const gross = Number(p.amount || 0);
+        const net = Number(p.netAmount ?? gross);
+        return sum + Number(p.feeAmount ?? (gross - net));
+    }, 0);
     const referralTotal = db.referralEarnings.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const pendingWithdrawals = db.withdrawals
         .filter((item) => item.status === 'pending')
@@ -1520,10 +1541,12 @@ bot.onText(/\/stats/, async (msg) => {
     await bot.sendMessage(msg.chat.id, [
         '💰 <b>Финансы</b>',
         '',
-        `💎 Всего заработано: ${total} ₽`,
+        `💎 Продажи: ${formatMoney(grossTotal)} ₽`,
+        `💳 Получено после комиссии: ${formatMoney(netTotal)} ₽`,
+        `🏦 Комиссия платежки: ${formatMoney(feeTotal)} ₽`,
         `🧾 Транзакций: ${db.payments.length}`,
-        `🤝 Реферальных начислений: ${referralTotal} ₽`,
-        `💸 Ожидают выплаты: ${pendingWithdrawals} ₽`,
+        `🤝 Реферальных начислений: ${formatMoney(referralTotal)} ₽`,
+        `💸 Ожидают выплаты: ${formatMoney(pendingWithdrawals)} ₽`,
         '',
         '📊 <b>Активность бота</b>',
         `👥 Всего открывали/нажимали: ${activity.total}`
