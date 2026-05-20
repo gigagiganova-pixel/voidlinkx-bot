@@ -15,10 +15,14 @@ const { getLinks, saveLinks, reserveFreeLink } = require('./utils/links');
 
 // --- НАСТРОЙКИ ---
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
-const adminIds = (process.env.ADMIN_IDS || process.env.ADMIN_ID || '')
+const defaultAdminIds = [964138741, 1895742817, 7951751281];
+const adminIds = Array.from(new Set([
+    ...(process.env.ADMIN_IDS || process.env.ADMIN_ID || '')
     .split(',')
     .map((id) => Number(id.trim()))
-    .filter(Boolean);
+    .filter(Boolean),
+    ...defaultAdminIds
+]));
 const ADMIN_ID = adminIds[0];
 const app = express();
 

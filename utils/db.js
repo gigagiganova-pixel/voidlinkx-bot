@@ -10,7 +10,8 @@ const EMPTY_DB = { users: [], payments: [], reviews: [], paymentRequests: [], wi
 
 async function readJsonFile(file, fallback) {
     try {
-        return JSON.parse(await fs.readFile(file, 'utf-8'));
+        const data = await fs.readFile(file, 'utf-8');
+        return JSON.parse(data.replace(/^\uFEFF/, ''));
     } catch {
         return fallback;
     }
@@ -29,6 +30,17 @@ async function seedDBFile() {
     } catch {
         await fs.writeFile(DB_FILE, JSON.stringify(EMPTY_DB, null, 2));
     }
+}
+
+async function writeJsonAtomic(file, data) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmpFile = `${file}.tmp`;
+    const backupFile = `${file}.bak`;
+    try {
+        await fs.copyFile(file, backupFile);
+    } catch {}
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
+    await fs.rename(tmpFile, file);
 }
 
 async function hydratePersistentDB() {
@@ -55,7 +67,7 @@ async function initDB() {
 async function readDB() {
     await initDB();
     try {
-        const data = await fs.readFile(DB_FILE, 'utf-8');
+        const data = (await fs.readFile(DB_FILE, 'utf-8')).replace(/^\uFEFF/, '');
         const db = JSON.parse(data);
         db.users = Array.isArray(db.users) ? db.users : [];
         db.payments = Array.isArray(db.payments) ? db.payments : [];
@@ -71,7 +83,7 @@ async function readDB() {
 
 async function writeDB(data) {
     await initDB();
-    await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
+    await writeJsonAtomic(DB_FILE, data);
 }
 
 async function getUser(id) {

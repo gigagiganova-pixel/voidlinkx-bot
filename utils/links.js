@@ -9,7 +9,8 @@ const LINKS_FILE = DATA_DIR ? path.join(DATA_DIR, 'links.json') : ROOT_LINKS_FIL
 
 async function readJsonFile(file, fallback) {
     try {
-        return JSON.parse(await fs.readFile(file, 'utf-8'));
+        const data = await fs.readFile(file, 'utf-8');
+        return JSON.parse(data.replace(/^\uFEFF/, ''));
     } catch {
         return fallback;
     }
@@ -25,16 +26,15 @@ async function seedLinksFile() {
     }
 }
 
-async function hydratePersistentLinks() {
-    if (!DATA_DIR) return;
-    const current = await readJsonFile(LINKS_FILE, []);
-    if (Array.isArray(current) && current.length > 0) return;
-
-    const seed = await readJsonFile(ROOT_LINKS_FILE, []);
-    if (!Array.isArray(seed) || seed.length === 0) return;
-
-    await fs.writeFile(LINKS_FILE, JSON.stringify(seed, null, 2));
-    console.log(`Persistent links restored from ${path.basename(ROOT_LINKS_FILE)}`);
+async function writeJsonAtomic(file, data) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmpFile = `${file}.tmp`;
+    const backupFile = `${file}.bak`;
+    try {
+        await fs.copyFile(file, backupFile);
+    } catch {}
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
+    await fs.rename(tmpFile, file);
 }
 
 async function initLinks() {
@@ -43,13 +43,12 @@ async function initLinks() {
     } catch {
         await seedLinksFile();
     }
-    await hydratePersistentLinks();
 }
 
 async function getLinks() {
     await initLinks();
     try {
-        const data = await fs.readFile(LINKS_FILE, 'utf-8');
+        const data = (await fs.readFile(LINKS_FILE, 'utf-8')).replace(/^\uFEFF/, '');
         return JSON.parse(data);
     } catch {
         return [];
@@ -58,7 +57,7 @@ async function getLinks() {
 
 async function saveLinks(data) {
     await initLinks();
-    await fs.writeFile(LINKS_FILE, JSON.stringify(data, null, 2));
+    await writeJsonAtomic(LINKS_FILE, data);
 }
 
 async function reserveFreeLink(owner = {}) {
