@@ -1,11 +1,402 @@
-[
-  { "url": "https://radiant-dolphin-64596b.netlify.app/", "status": "free" },
-  { "url": "https://delightful-moonbeam-b42f7a.netlify.app/", "status": "free" },
-  { "url": "https://strong-youtiao-9494db.netlify.app/", "status": "free" },
-  { "url": "https://shiny-pixie-f9764e.netlify.app/", "status": "free" },
-  { "url": "https://playful-meringue-905e4a.netlify.app/", "status": "free" },
-  { "url": "https://fascinating-cascaron-bccce0.netlify.app/", "status": "free" },
-  { "url": "https://lighthearted-platypus-f4d5af.netlify.app/", "status": "free" },
-  { "url": "https://exquisite-kulfi-e10abd.netlify.app/", "status": "free" },
-  { "url": "https://statuesque-banoffee-f3e580.netlify.app/", "status": "free" }
+﻿[
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-xk62zogzg-863845",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mwq8kkjxg-a437bd",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-yzhqei5ja-5d8352",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mo71hlrqka-919a08",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-pdkgditc3w-e6df9d",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-m47sx66lqw-a14f34",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-c2ag7hqs0a-136ce6",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-d68otyqojg-393eb4",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-r3kaksgruq-768a40",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-7arqpbn1q-eff2b1",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-dy1d1jfjg-7760f4",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-6wpojhjxbg-968186",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-3flakshecq-546c6b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-kjdjkxbmjg-13da0c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-7jnzoiaxpa-f3096d",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-klo7id66iw-ce08a5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-2egl8jxcng-6fb505",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-vxboefbfxw-3d1a36",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-pl3wlpsbpw-75c569",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ubudklpggq-ac9df5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-4hwvlb5zga-37abc0",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-05sd1hehw-a6592c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ikjvp0owjg-9d134c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-h4vhtoxtw-f89d6d",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-xsj1bxcbja-e5c7dd",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-axm05eavg-cfaf5a",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-vyllwsqvsg-b5cb47",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-kacw6gj4cg-ed20d5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-obt0ailpzg-e1fd46",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-isxmcrvy4g-33f3c3",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-3pxxnpvtxa-0d5f4c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-omegxf71lg-9baf0d",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-7tddp1edqa-5f1a0d",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-w4nivkxwrg-4fe9b6",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-jv6byw5tmg-d62ba8",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-hel1v6iweq-4adc47",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-er25raomg-f2ca61",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-rgmnnpl0ca-2777a1",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-o6pwsthkw-13f434",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-rzn0tluotg-4218cd",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-enwnvfxy3w-f59032",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-xmpf0vygaw-48c777",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-9aagcaohq-5a7dcd",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ak2nsclvia-bb2391",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ioqdibxnqw-4b45a0",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-4d0mwadnvg-a6eb2c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-v0j3awonw-a72c0c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-bznsj0jvsa-5d962c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-9lcn1g8roa-3628ba",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-9bdmixpxa-dfe34b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-iq9uqm2dq-313fd6",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-y8fjbkkow-68f9f2",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-sl0pdj8bg-fc2686",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-2hf60p70g-1ffc60",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-gicxldytug-553c56",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-kl9va4ukdq-ec8ff5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-aeubtkk2w-437cdf",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-fqxbbcp23a-325188",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-erg4jicasa-502ee4",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-gzuniawc9g-3e0ab7",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-assevj2pg-bf4850",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-umfbi2qda-5df5c2",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ubvvqkiodq-061f39",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-slx572xfpq-8de5d5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-aj1vrzy9g-d88a32",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-xswpw0aig-aa854b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-vemebuevpa-251b16",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-ovgs3gc8g-c8cc2a",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-bhcpldapqw-fba16e",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mkhztjg2ra-ba932b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-gv0ovlhymg-7a6a27",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mfmbcp3kha-5aaa07",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-1qskr9vhmw-c0cea9",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-hh1xqvkzmq-00152f",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-gzldfcbdja-57d30e",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-lrtdguteq-f908a2",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-uy6zamwgsa-ac3607",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-o9lclcuqda-0dd466",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-2xprqycbpq-53d8c3",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-a5uv8rwp5w-4328bf",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-axdpmxtpya-1dc65b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-st0ngavbua-6487af",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-vxwhg6kybq-449817",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-s77n9keczg-b05aae",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mevnyedo6a-3dee6b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-svmuknmtca-7cc4d5",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-lseopn60g-62af57",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-skze8e9hza-0f0c70",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-q3hcnw2xsa-c3cb6c",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-vwsorrys7w-781fbd",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-lvem9kg2sa-b68fea",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-xpzc8evfg-79b228",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-be3oeogaig-33a20f",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-da0lsopmyg-3e3e5b",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-73szkmn05q-91a580",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-mkltqcylkq-ebd7ea",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-bxgorbrexa-3e1490",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-wz5ievv6xq-e5940a",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-smkp64crag-f966ea",
+        "status":  "free"
+    },
+    {
+        "url":  "https://vx-radar-0526.netlify.app?admin=vx-7btxxj1wrq-12b148",
+        "status":  "free"
+    }
 ]

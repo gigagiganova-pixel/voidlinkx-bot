@@ -6,6 +6,7 @@ const ROOT_DB_FILE = path.resolve(__dirname, '../database.json');
 const hasDataMount = process.platform !== 'win32' && fsSync.existsSync('/data');
 const DATA_DIR = process.env.DATA_DIR || ((process.env.AMVERUM || hasDataMount) ? '/data' : '');
 const DB_FILE = DATA_DIR ? path.join(DATA_DIR, 'database.json') : ROOT_DB_FILE;
+const DATA_RESET_VERSION = process.env.DATA_RESET_VERSION || '';
 const EMPTY_DB = { users: [], payments: [], reviews: [], paymentRequests: [], withdrawals: [], referralEarnings: [], meta: {} };
 let writeQueue = Promise.resolve();
 
@@ -71,6 +72,15 @@ function enqueueWrite(task) {
 async function hydratePersistentDB() {
     if (!DATA_DIR) return;
     const current = await readJsonFile(DB_FILE, EMPTY_DB);
+    const currentVersion = normalizeDB(current).meta.seedVersion || '';
+    if (DATA_RESET_VERSION && currentVersion !== DATA_RESET_VERSION) {
+        const seed = normalizeDB(await readJsonFile(ROOT_DB_FILE, EMPTY_DB));
+        seed.meta.seedVersion = DATA_RESET_VERSION;
+        await writeJsonAtomic(DB_FILE, seed);
+        console.log(`Persistent database reset to data version ${DATA_RESET_VERSION}`);
+        return;
+    }
+
     if (hasBusinessData(current)) return;
 
     const seed = await readJsonFile(ROOT_DB_FILE, EMPTY_DB);

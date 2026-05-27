@@ -1,4 +1,4 @@
-const dotenvResult = require('dotenv').config();
+const dotenvResult = require('dotenv').config({ override: true });
 const fileEnv = dotenvResult.parsed || {};
 ['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'PAYMENT_NET_AMOUNT', 'REGULAR_PRICE', 'DISCOUNT_UNTIL_TEXT', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
     if (!process.env[key] && fileEnv[key]) {
@@ -43,7 +43,8 @@ const paymentFeeAmount = Number((paymentGrossAmount - paymentNetAmount).toFixed(
 const regularPrice = process.env.REGULAR_PRICE || '500';
 const discountUntilText = process.env.DISCOUNT_UNTIL_TEXT || 'примерно через неделю';
 const referralPercent = 10;
-const referralCommission = Math.round(Number(price) * referralPercent / 100);
+const referralRawCommission = Number(price) * referralPercent / 100;
+const referralCommission = Math.ceil(referralRawCommission / 10) * 10;
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 const lowLinksThreshold = Number(process.env.LOW_LINKS_THRESHOLD || 3);
@@ -173,13 +174,13 @@ function adminProfileText(profile = {}) {
 
 function buildPriceLine() {
     if (String(price) === String(regularPrice)) {
-        return `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽`;
+        return `💎 <b>Стоимость:</b> ${escapeHtml(price)} ₽ в месяц`;
     }
 
     const discount = Math.max(0, Number(regularPrice) - Number(price));
     return [
-        `💎 <b>Стоимость сейчас:</b> ${escapeHtml(price)} ₽`,
-        `🔥 Временная скидка: -${discount || 50} ₽. ${escapeHtml(discountUntilText)} цена вернётся к ${escapeHtml(regularPrice)} ₽.`
+        `💎 <b>Стоимость сейчас:</b> ${escapeHtml(price)} ₽ в месяц`,
+        `🔥 Временная скидка: -${discount || 50} ₽. ${escapeHtml(discountUntilText)} цена вернётся к ${escapeHtml(regularPrice)} ₽ в месяц.`
     ].join('\n');
 }
 
@@ -438,6 +439,7 @@ function buildReferralIntroText() {
         '',
         buildPriceLine(),
         `💰 Начисление за одну покупку: ${referralCommission} ₽`,
+        `Мы округляем комиссию в пользу партнёра: ${formatMoney(referralRawCommission)} ₽ превращаются в ${referralCommission} ₽.`,
         '',
         '<b>Как это работает:</b>',
         '1. Вы регистрируете реквизиты для выплат.',
@@ -479,7 +481,7 @@ function buildReferralCabinetText(user) {
         '<b>Ваша ссылка:</b>',
         referralLink(user.id),
         '',
-        `Комиссия: ${referralPercent}% с подтверждённой покупки (${referralCommission} ₽ сейчас).`
+        `Комиссия: ${referralPercent}% с подтверждённой покупки (${referralCommission} ₽ сейчас, округляем в пользу партнёра).`
     ].join('\n');
 }
 

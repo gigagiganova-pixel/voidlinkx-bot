@@ -6,6 +6,8 @@ const ROOT_LINKS_FILE = path.resolve(__dirname, '../links.json');
 const hasDataMount = process.platform !== 'win32' && fsSync.existsSync('/data');
 const DATA_DIR = process.env.DATA_DIR || ((process.env.AMVERUM || hasDataMount) ? '/data' : '');
 const LINKS_FILE = DATA_DIR ? path.join(DATA_DIR, 'links.json') : ROOT_LINKS_FILE;
+const DATA_RESET_VERSION = process.env.DATA_RESET_VERSION || '';
+const LINKS_VERSION_FILE = DATA_DIR ? path.join(DATA_DIR, 'links.seed-version') : '';
 let writeQueue = Promise.resolve();
 
 async function readJsonFile(file, fallback) {
@@ -60,6 +62,19 @@ async function initLinks() {
         await fs.access(LINKS_FILE);
     } catch {
         await seedLinksFile();
+    }
+
+    if (DATA_DIR && DATA_RESET_VERSION) {
+        let currentVersion = '';
+        try {
+            currentVersion = (await fs.readFile(LINKS_VERSION_FILE, 'utf-8')).trim();
+        } catch {}
+
+        if (currentVersion !== DATA_RESET_VERSION) {
+            await seedLinksFile();
+            await fs.writeFile(LINKS_VERSION_FILE, DATA_RESET_VERSION);
+            console.log(`Persistent links reset to data version ${DATA_RESET_VERSION}`);
+        }
     }
 }
 
