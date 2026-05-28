@@ -48,7 +48,13 @@ const referralCommission = Math.ceil(referralRawCommission / 10) * 10;
 const botUsername = (process.env.BOT_USERNAME || 'voidlinkx_bot').replace(/^@/, '');
 const supportUsername = (process.env.SUPPORT_USERNAME || 'vdx_support').replace(/^@/, '');
 const lowLinksThreshold = Number(process.env.LOW_LINKS_THRESHOLD || 3);
+const linksPageSize = 20;
+const dataDir = process.env.DATA_DIR || ((process.env.AMVERA || process.env.AMVERUM || (process.platform !== 'win32' && fs.existsSync('/data'))) ? '/data' : '');
+const pollingLockFile = dataDir ? path.join(dataDir, 'bot-polling.lock') : '';
+const pollingLockTtlMs = 45_000;
+const instanceId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let pollingConflictShown = false;
+let pollingLockTimer = null;
 const reviewDrafts = new Map();
 const referralDrafts = new Map();
 const broadcastDrafts = new Set();
@@ -879,6 +885,17 @@ bot.on('callback_query', async (query) => {
         const profile = profileFromTelegram(query.from);
         await upsertUserProfile(profile, { action: `button:${query.data}` });
 
+        if (query.data === 'links_page_info') {
+            return;
+        }
+
+        if (query.data?.startsWith('links_page_')) {
+            if (!isAdmin(query.from.id)) return;
+            const page = Number(query.data.replace('links_page_', '')) || 0;
+            await sendLinksPage(chatId, page, query.message?.message_id);
+            return;
+        }
+
         if (query.data === 'admin_broadcast') {
             if (!isAdmin(query.from.id)) return;
             broadcastDrafts.add(query.from.id);
@@ -1531,8 +1548,72 @@ bot.onText(/\/referral/, async (msg) => {
     });
 });
 
+function buildLinksPagePayload(links, page = 0) {
+    const total = links.length;
+    const free = links.filter((link) => link.status === 'free').length;
+    const totalPages = Math.max(1, Math.ceil(total / linksPageSize));
+    const currentPage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
+    const offset = currentPage * linksPageSize;
+    const pageLinks = links.slice(offset, offset + linksPageSize);
+    const details = pageLinks.map((link, index) => {
+        const status = link.status || 'free';
+        const marker = status === 'free' ? 'рџџў' : 'рџ”ґ';
+        return `${offset + index + 1}. ${marker} ${escapeHtml(status)}\n   ${escapeHtml(link.url)}`;
+    });
+
+    const text = [
+        'рџ“¦ <b>РџСѓР» СЃСЃС‹Р»РѕРє</b>',
+        '',
+        `рџџў РЎРІРѕР±РѕРґРЅРѕ: ${free}`,
+        `рџ“Љ Р’СЃРµРіРѕ: ${total}`,
+        `рџ“„ РЎС‚СЂР°РЅРёС†Р°: ${currentPage + 1}/${totalPages}`,
+        'рџ”„ РћР±РЅРѕРІР»РµРЅРёРµ РїСѓР»Р°: 11:00 Рё 23:00 РїРѕ РњРЎРљ',
+        '',
+        ...(details.length ? details : ['РЎСЃС‹Р»РѕРє РІ РїСѓР»Рµ РїРѕРєР° РЅРµС‚.'])
+    ].join('\n');
+
+    const keyboard = totalPages > 1
+        ? [[
+            { text: 'в—ЂпёЏ', callback_data: `links_page_${Math.max(0, currentPage - 1)}` },
+            { text: `${currentPage + 1}/${totalPages}`, callback_data: 'links_page_info' },
+            { text: 'в–¶пёЏ', callback_data: `links_page_${Math.min(totalPages - 1, currentPage + 1)}` }
+        ]]
+        : [];
+
+    return { text, keyboard };
+}
+
+async function sendLinksPage(chatId, page = 0, messageId = null) {
+    const links = await getLinks();
+    const payload = buildLinksPagePayload(links, page);
+    const options = {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: payload.keyboard }
+    };
+
+    if (messageId) {
+        try {
+            await bot.editMessageText(payload.text, {
+                chat_id: chatId,
+                message_id: messageId,
+                ...options
+            });
+        } catch (error) {
+            if (!String(error.message).includes('message is not modified')) {
+                throw error;
+            }
+        }
+        return;
+    }
+
+    await bot.sendMessage(chatId, payload.text, options);
+}
+
 bot.onText(/\/links/, async (msg) => {
     if (!isAdmin(msg.chat.id)) return;
+    await sendLinksPage(msg.chat.id, 0);
+    return;
     const links = await getLinks();
     const free = links.filter(l => l.status === 'free').length;
     const details = links.slice(0, 20).map((link, index) => {
@@ -1696,10 +1777,77 @@ async function configureBotProfile() {
         ];
 
         for (const adminId of adminIds) {
-            await bot.setMyCommands(adminCommands, { scope: { type: 'chat', chat_id: adminId } });
+            try {
+                await bot.setMyCommands(adminCommands, { scope: { type: 'chat', chat_id: adminId } });
+            } catch (error) {
+                console.warn(`Не удалось обновить команды администратора ${adminId}: ${error.message}`);
+            }
         }
     } catch (error) {
         console.error('Не удалось обновить описание бота:', error.message);
+    }
+}
+
+async function readPollingLock() {
+    if (!pollingLockFile) return null;
+
+    try {
+        return JSON.parse(await fs.promises.readFile(pollingLockFile, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+async function writePollingLock() {
+    if (!pollingLockFile) return;
+
+    await fs.promises.mkdir(path.dirname(pollingLockFile), { recursive: true });
+    const payload = {
+        instanceId,
+        pid: process.pid,
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + pollingLockTtlMs
+    };
+    const tmpFile = `${pollingLockFile}.${instanceId}.tmp`;
+    await fs.promises.writeFile(tmpFile, JSON.stringify(payload, null, 2));
+    await fs.promises.rename(tmpFile, pollingLockFile);
+}
+
+async function acquirePollingLock() {
+    if (!pollingLockFile) return true;
+
+    const lock = await readPollingLock();
+    if (lock?.instanceId && Number(lock.expiresAt || 0) > Date.now() && lock.instanceId !== instanceId) {
+        console.error(`Telegram polling skipped: active instance ${lock.instanceId} keeps the lock.`);
+        return false;
+    }
+
+    await writePollingLock();
+    const confirmedLock = await readPollingLock();
+    return confirmedLock?.instanceId === instanceId;
+}
+
+function startPollingLockHeartbeat() {
+    if (!pollingLockFile || pollingLockTimer) return;
+
+    pollingLockTimer = setInterval(() => {
+        writePollingLock().catch((error) => {
+            console.error(`Telegram polling lock heartbeat failed: ${error.message}`);
+        });
+    }, Math.floor(pollingLockTtlMs / 3));
+}
+
+async function releasePollingLock() {
+    if (pollingLockTimer) {
+        clearInterval(pollingLockTimer);
+        pollingLockTimer = null;
+    }
+
+    if (!pollingLockFile) return;
+
+    const lock = await readPollingLock();
+    if (lock?.instanceId === instanceId) {
+        await fs.promises.unlink(pollingLockFile).catch(() => {});
     }
 }
 
@@ -1712,6 +1860,12 @@ async function startBot() {
         throw new Error('ADMIN_ID/ADMIN_IDS не задан или не является числом');
     }
 
+    const hasPollingLock = await acquirePollingLock();
+    if (!hasPollingLock) {
+        return;
+    }
+
+    startPollingLockHeartbeat();
     await bot.deleteWebHook({ drop_pending_updates: true });
     await bot.startPolling({ restart: true });
     await configureBotProfile();
@@ -1726,6 +1880,14 @@ app.listen(PORT, '0.0.0.0', () => {
 
 app.get('/', (req, res) => {
     res.json({ ok: true, service: 'VOIDLINK X BOT' });
+});
+
+process.once('SIGTERM', () => {
+    releasePollingLock().finally(() => process.exit(0));
+});
+
+process.once('SIGINT', () => {
+    releasePollingLock().finally(() => process.exit(0));
 });
 
 startBot().catch((error) => {
