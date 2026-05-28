@@ -1557,26 +1557,27 @@ function buildLinksPagePayload(links, page = 0) {
     const pageLinks = links.slice(offset, offset + linksPageSize);
     const details = pageLinks.map((link, index) => {
         const status = link.status || 'free';
-        const marker = status === 'free' ? 'рџџў' : 'рџ”ґ';
-        return `${offset + index + 1}. ${marker} ${escapeHtml(status)}\n   ${escapeHtml(link.url)}`;
+        const marker = status === 'free' ? '🟢' : '🔴';
+        const label = status === 'free' ? 'свободна' : status;
+        return `${offset + index + 1}. ${marker} ${escapeHtml(label)}\n   ${escapeHtml(link.url)}`;
     });
 
     const text = [
-        'рџ“¦ <b>РџСѓР» СЃСЃС‹Р»РѕРє</b>',
+        '📦 <b>Пул ссылок</b>',
         '',
-        `рџџў РЎРІРѕР±РѕРґРЅРѕ: ${free}`,
-        `рџ“Љ Р’СЃРµРіРѕ: ${total}`,
-        `рџ“„ РЎС‚СЂР°РЅРёС†Р°: ${currentPage + 1}/${totalPages}`,
-        'рџ”„ РћР±РЅРѕРІР»РµРЅРёРµ РїСѓР»Р°: 11:00 Рё 23:00 РїРѕ РњРЎРљ',
+        `🟢 Свободно: ${free}`,
+        `📊 Всего: ${total}`,
+        `📄 Страница: ${currentPage + 1}/${totalPages}`,
+        '🔄 Обновление пула: 11:00 и 23:00 по МСК',
         '',
-        ...(details.length ? details : ['РЎСЃС‹Р»РѕРє РІ РїСѓР»Рµ РїРѕРєР° РЅРµС‚.'])
+        ...(details.length ? details : ['Ссылок в пуле пока нет.'])
     ].join('\n');
 
     const keyboard = totalPages > 1
         ? [[
-            { text: 'в—ЂпёЏ', callback_data: `links_page_${Math.max(0, currentPage - 1)}` },
+            { text: '◀️', callback_data: `links_page_${Math.max(0, currentPage - 1)}` },
             { text: `${currentPage + 1}/${totalPages}`, callback_data: 'links_page_info' },
-            { text: 'в–¶пёЏ', callback_data: `links_page_${Math.min(totalPages - 1, currentPage + 1)}` }
+            { text: '▶️', callback_data: `links_page_${Math.min(totalPages - 1, currentPage + 1)}` }
         ]]
         : [];
 
