@@ -9,6 +9,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const productConfig = require('./product-config.json');
 
 const { getUser, saveUser, addPayment, readDB, writeDB, updateDB } = require('./utils/db');
 const { getLinks, saveLinks, reserveFreeLink } = require('./utils/links');
@@ -36,12 +37,12 @@ const photoSupport = path.resolve(__dirname, 'assets/support.jpg');
 const photoReviews = path.resolve(__dirname, 'assets/reviews.jpg');
 const photoReferral = path.resolve(__dirname, 'assets/referral.jpg');
 
-const price = process.env.PRICE || '500';
+const price = String(productConfig.price ?? process.env.PRICE ?? '1490');
 const paymentGrossAmount = Number(price);
-const paymentNetAmount = Number(process.env.PAYMENT_NET_AMOUNT || (paymentGrossAmount * 0.97).toFixed(2));
+const paymentNetAmount = Number(productConfig.paymentNetAmount ?? process.env.PAYMENT_NET_AMOUNT ?? (paymentGrossAmount * 0.97).toFixed(2));
 const paymentFeeAmount = Number((paymentGrossAmount - paymentNetAmount).toFixed(2));
-const regularPrice = process.env.REGULAR_PRICE || '500';
-const discountUntilText = process.env.DISCOUNT_UNTIL_TEXT || 'примерно через неделю';
+const regularPrice = String(productConfig.regularPrice ?? process.env.REGULAR_PRICE ?? price);
+const discountUntilText = productConfig.discountUntilText || process.env.DISCOUNT_UNTIL_TEXT || '';
 const referralPercent = 10;
 const referralRawCommission = Number(price) * referralPercent / 100;
 const referralCommission = Math.ceil(referralRawCommission / 10) * 10;
