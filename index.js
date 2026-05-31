@@ -1,4 +1,4 @@
-const dotenvResult = require('dotenv').config({ override: true });
+const dotenvResult = require('dotenv').config();
 const fileEnv = dotenvResult.parsed || {};
 ['BOT_TOKEN', 'ADMIN_ID', 'ADMIN_IDS', 'PRICE', 'PAYMENT_NET_AMOUNT', 'REGULAR_PRICE', 'DISCOUNT_UNTIL_TEXT', 'PUBLIC_URL', 'CRYPTO_SECRET', 'YOOMONEY_WALLET', 'BOT_USERNAME', 'SUPPORT_USERNAME'].forEach((key) => {
     if (!process.env[key] && fileEnv[key]) {
