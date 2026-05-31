@@ -1817,31 +1817,77 @@ async function writePollingLock() {
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + pollingLockTtlMs
     };
-    const tmpFile = `${pollingLockFile}.${instanceId}.tmp`;
-    await fs.promises.writeFile(tmpFile, JSON.stringify(payload, null, 2));
-    await fs.promises.rename(tmpFile, pollingLockFile);
+    await fs.promises.writeFile(pollingLockFile, JSON.stringify(payload, null, 2));
+}
+
+async function tryAcquirePollingLock() {
+    if (!pollingLockFile) return true;
+
+    await fs.promises.mkdir(path.dirname(pollingLockFile), { recursive: true });
+
+    const payload = {
+        instanceId,
+        pid: process.pid,
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + pollingLockTtlMs
+    };
+
+    try {
+        await fs.promises.writeFile(pollingLockFile, JSON.stringify(payload, null, 2), { flag: 'wx' });
+        return true;
+    } catch (error) {
+        if (error.code !== 'EEXIST') {
+            throw error;
+        }
+    }
+
+    const lock = await readPollingLock();
+    if (lock?.instanceId && Number(lock.expiresAt || 0) > Date.now() && lock.instanceId !== instanceId) {
+        return false;
+    }
+
+    await fs.promises.unlink(pollingLockFile).catch(() => {});
+    return false;
 }
 
 async function acquirePollingLock() {
     if (!pollingLockFile) return true;
 
-    const lock = await readPollingLock();
-    if (lock?.instanceId && Number(lock.expiresAt || 0) > Date.now() && lock.instanceId !== instanceId) {
-        console.error(`Telegram polling skipped: active instance ${lock.instanceId} keeps the lock.`);
-        return false;
+    const timeoutAt = Date.now() + pollingLockTtlMs * 2;
+    let waitingShown = false;
+
+    while (Date.now() < timeoutAt) {
+        if (await tryAcquirePollingLock()) {
+            console.log(`Telegram polling lock acquired by ${instanceId}`);
+            return true;
+        }
+
+        if (!waitingShown) {
+            waitingShown = true;
+            console.log('Telegram polling lock is busy. Waiting for the previous container to stop...');
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
-    await writePollingLock();
-    const confirmedLock = await readPollingLock();
-    return confirmedLock?.instanceId === instanceId;
+    return false;
 }
 
 function startPollingLockHeartbeat() {
     if (!pollingLockFile || pollingLockTimer) return;
 
     pollingLockTimer = setInterval(() => {
-        writePollingLock().catch((error) => {
-            console.error(`Telegram polling lock heartbeat failed: ${error.message}`);
+        readPollingLock().then((lock) => {
+            if (lock?.instanceId !== instanceId) {
+                throw new Error('lock ownership was lost');
+            }
+
+            return writePollingLock();
+        }).catch((error) => {
+            clearInterval(pollingLockTimer);
+            pollingLockTimer = null;
+            bot.stopPolling().catch(() => {});
+            console.error(`Telegram polling stopped: ${error.message}`);
         });
     }, Math.floor(pollingLockTtlMs / 3));
 }
@@ -1871,7 +1917,7 @@ async function startBot() {
 
     const hasPollingLock = await acquirePollingLock();
     if (!hasPollingLock) {
-        return;
+        throw new Error('Не удалось получить Telegram polling lock: другой контейнер не остановился');
     }
 
     startPollingLockHeartbeat();
